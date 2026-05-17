@@ -413,9 +413,14 @@ class FallbackChatLLM:
         for idx, (candidate, client) in enumerate(zip(self.candidates, self._clients)):
             yielded = False
             try:
+                first = True
                 for chunk in client.stream(messages, config=config):
                     yielded = True
-                    yield self._tag_message(chunk, candidate)
+                    if first:
+                        yield self._tag_message(chunk, candidate)
+                        first = False
+                    else:
+                        yield chunk
                 return
             except Exception as exc:
                 if yielded or idx == len(self._clients) - 1 or not _is_retryable_llm_error(exc):

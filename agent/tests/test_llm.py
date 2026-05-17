@@ -238,7 +238,7 @@ class TestReasoningEffortPassthrough:
 
 
 class TestProviderFallback:
-    """Fallback chain behavior for OpenRouter -> Groq -> OpenAI Codex."""
+    """Fallback chain behavior for OpenRouter -> OpenAI Codex."""
 
     def _build_with_fake_provider(
         self,
@@ -289,18 +289,16 @@ class TestProviderFallback:
                 "LANGCHAIN_PROVIDER": "openrouter",
                 "LANGCHAIN_MODEL_NAME": "deepseek/custom-primary",
                 "OPENROUTER_API_KEY": "or-test",
-                "GROQ_API_KEY": "gsk-test",
             },
         )
 
         assert isinstance(llm, FallbackChatLLM)
         assert llm.candidates == [
             LLMCandidate("openrouter", "deepseek/custom-primary"),
-            LLMCandidate("groq", "llama-3.3-70b-versatile"),
             LLMCandidate("openai-codex", "openai-codex/gpt-5.3-codex"),
         ]
 
-    def test_retryable_429_advances_to_groq(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_retryable_429_advances_to_codex(self, monkeypatch: pytest.MonkeyPatch) -> None:
         llm, calls = self._build_with_fake_provider(
             monkeypatch,
             {
@@ -310,10 +308,10 @@ class TestProviderFallback:
             failures={"openrouter": RuntimeError("HTTP 429: rate limit exceeded")},
         )
 
-        assert llm.invoke([{"role": "user", "content": "hi"}]) == "ok:groq:llama-3.3-70b-versatile"
-        assert [provider for provider, _, _ in calls] == ["openrouter", "groq"]
+        assert llm.invoke([{"role": "user", "content": "hi"}]) == "ok:openai-codex:openai-codex/gpt-5.3-codex"
+        assert [provider for provider, _, _ in calls] == ["openrouter", "openai-codex"]
 
-    def test_retryable_groq_failure_advances_to_codex(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_all_candidates_fail_raises_last_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         llm, calls = self._build_with_fake_provider(
             monkeypatch,
             {
@@ -322,12 +320,13 @@ class TestProviderFallback:
             },
             failures={
                 "openrouter": RuntimeError("HTTP 429: quota exceeded"),
-                "groq": RuntimeError("HTTP 503: temporarily unavailable"),
+                "openai-codex": RuntimeError("HTTP 503: temporarily unavailable"),
             },
         )
 
-        assert llm.invoke([{"role": "user", "content": "hi"}]) == "ok:openai-codex:openai-codex/gpt-5.3-codex"
-        assert [provider for provider, _, _ in calls] == ["openrouter", "groq", "openai-codex"]
+        with pytest.raises(RuntimeError, match="HTTP 503: temporarily unavailable"):
+            llm.invoke([{"role": "user", "content": "hi"}])
+        assert [provider for provider, _, _ in calls] == ["openrouter", "openai-codex"]
 
     def test_non_retryable_error_does_not_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         llm, calls = self._build_with_fake_provider(
@@ -362,7 +361,6 @@ class TestProviderFallback:
             {
                 "LANGCHAIN_PROVIDER": "openrouter",
                 "LANGCHAIN_MODEL_NAME": "primary-model",
-                "GROQ_FALLBACK_MODEL": "groq/custom",
                 "OPENAI_CODEX_FALLBACK_MODEL": "openai-codex/custom",
             },
         )
@@ -370,7 +368,6 @@ class TestProviderFallback:
         assert isinstance(llm, FallbackChatLLM)
         assert llm.candidates == [
             LLMCandidate("openrouter", "primary-model"),
-            LLMCandidate("groq", "groq/custom"),
             LLMCandidate("openai-codex", "openai-codex/custom"),
         ]
 
@@ -386,8 +383,8 @@ class TestProviderFallback:
 
         tools = [{"type": "function", "function": {"name": "lookup"}}]
         bound = llm.bind_tools(tools)
-        assert bound.invoke([{"role": "user", "content": "hi"}]) == "ok:groq:llama-3.3-70b-versatile"
-        assert calls == [("openrouter", "deepseek/deepseek-v3.2", tools), ("groq", "llama-3.3-70b-versatile", tools)]
+        assert bound.invoke([{"role": "user", "content": "hi"}]) == "ok:openai-codex:openai-codex/gpt-5.3-codex"
+        assert calls == [("openrouter", "deepseek/deepseek-v3.2", tools), ("openai-codex", "openai-codex/gpt-5.3-codex", tools)]
 
     def test_successful_candidate_tags_provider_and_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import src.providers.llm as llm_mod
@@ -430,8 +427,8 @@ class TestProviderFallback:
         from src.providers.chat import ChatLLM
 
         response = ChatLLM._parse_response(parsed)
-        assert response.provider == "groq"
-        assert response.model == "llama-3.3-70b-versatile"
+        assert response.provider == "openai-codex"
+        assert response.model == "openai-codex/gpt-5.3-codex"
 
 
 class TestExtractBalancedJson:
