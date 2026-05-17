@@ -203,6 +203,7 @@ class SessionService:
             else:
                 attempt.mark_failed(error=result.get("reason", "unknown"))
             attempt.run_dir = result.get("run_dir")
+            attempt.metrics = result.get("metrics")
 
             self.store.update_attempt(attempt)
             reply_metadata = {}
@@ -211,6 +212,10 @@ class SessionService:
             reply_metadata["status"] = attempt.status.value
             if attempt.metrics:
                 reply_metadata["metrics"] = attempt.metrics
+            if result.get("provider"):
+                reply_metadata["provider"] = result["provider"]
+            if result.get("model"):
+                reply_metadata["model"] = result["model"]
 
             reply = Message(
                 session_id=session.session_id, role="assistant",
@@ -224,7 +229,8 @@ class SessionService:
                 session.session_id,
                 "attempt.completed" if attempt.status == AttemptStatus.COMPLETED else "attempt.failed",
                 {"attempt_id": attempt.attempt_id, "status": attempt.status.value,
-                 "summary": attempt.summary, "error": attempt.error, "run_dir": attempt.run_dir},
+                 "summary": attempt.summary, "error": attempt.error, "run_dir": attempt.run_dir,
+                 "provider": result.get("provider"), "model": result.get("model")},
             )
 
         except Exception as exc:

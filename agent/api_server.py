@@ -300,6 +300,9 @@ app.add_middleware(
 @app.on_event("startup")
 async def _run_startup_preflight() -> None:
     """Run preflight checks on server startup."""
+    if os.getenv("VIBE_TRADING_SKIP_PREFLIGHT", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+
     from src.preflight import run_preflight
 
     run_preflight(console)
