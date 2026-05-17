@@ -59,7 +59,11 @@ class CodexAIMessage:
             content=(self.content or "") + (other.content or ""),
             tool_calls=[*self.tool_calls, *other.tool_calls],
             additional_kwargs={"reasoning_content": reasoning} if reasoning else {},
-            response_metadata={"finish_reason": finish_reason},
+            response_metadata={
+                **self.response_metadata,
+                **other.response_metadata,
+                "finish_reason": finish_reason,
+            },
         )
 
 

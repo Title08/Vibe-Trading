@@ -345,6 +345,8 @@ class AgentLoop:
 
         iteration = 0
         final_content = ""
+        response_provider: str | None = None
+        response_model: str | None = None
 
         try:
             while iteration < self.max_iterations:
@@ -391,6 +393,8 @@ class AgentLoop:
                     tools=self.registry.get_definitions(),
                     on_text_chunk=_on_text_chunk,
                 )
+                response_provider = response.provider or response_provider
+                response_model = response.model or response_model
 
                 thinking_text = "".join(thinking_chunks)
                 if thinking_text:
@@ -474,6 +478,10 @@ class AgentLoop:
         }
         if final_reason is not None:
             result["reason"] = final_reason
+        if response_provider:
+            result["provider"] = response_provider
+        if response_model:
+            result["model"] = response_model
         return result
 
     # -- Tool execution with read/write batching --------------------------------

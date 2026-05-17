@@ -2548,6 +2548,11 @@ def _render_env_content(config: dict[str, str]) -> str:
         "TUSHARE_TOKEN",
         "TIMEOUT_SECONDS",
         "MAX_RETRIES",
+        "LLM_FALLBACK_ENABLED",
+        "LLM_FALLBACK_CHAIN",
+        "OPENROUTER_FALLBACK_MODEL",
+        "GROQ_FALLBACK_MODEL",
+        "OPENAI_CODEX_FALLBACK_MODEL",
     ]
     lines: list[str] = []
     for key in ordered_keys:
@@ -2731,6 +2736,8 @@ def cmd_init() -> int:
         "LANGCHAIN_MODEL_NAME": default_model,
         "TIMEOUT_SECONDS": "120",
         "MAX_RETRIES": "2",
+        "LLM_FALLBACK_ENABLED": "true",
+        "LLM_FALLBACK_CHAIN": "openrouter,groq,openai-codex",
     }
 
     if key_env is not None:

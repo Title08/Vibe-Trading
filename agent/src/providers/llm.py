@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import asyncio
 from pathlib import Path
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, Optional
 
 try:
     from dotenv import load_dotenv
@@ -87,6 +90,57 @@ else:
     ChatOpenAIWithReasoning = None  # type: ignore
 
 AGENT_DIR = Path(__file__).resolve().parents[2]
+logger = logging.getLogger(__name__)
+
+DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
+DEFAULT_FALLBACK_CHAIN = ("openrouter", "groq", "openai-codex")
+DEFAULT_FALLBACK_MODELS = {
+    "openrouter": "deepseek/deepseek-v3.2",
+    "groq": "llama-3.3-70b-versatile",
+    "openai-codex": "openai-codex/gpt-5.3-codex",
+}
+RETRYABLE_STATUS_CODES = ("429", "402", "500", "502", "503", "504")
+RETRYABLE_ERROR_MARKERS = (
+    "rate limit",
+    "rate_limit",
+    "quota",
+    "insufficient_quota",
+    "overloaded",
+    "temporarily unavailable",
+    "capacity",
+    "timeout",
+    "timed out",
+)
+NON_RETRYABLE_ERROR_MARKERS = (
+    "invalid api key",
+    "incorrect api key",
+    "unauthorized",
+    "authentication",
+    "permission denied",
+    "not logged in",
+    "provider login openai-codex",
+    "bad request",
+    "invalid request",
+    "unsupported model",
+    "content policy",
+    "content_filter",
+)
+
+PROVIDER_MAP: dict[str, tuple[str | None, str]] = {
+    "openai": ("OPENAI_API_KEY", "OPENAI_BASE_URL"),
+    "openrouter": ("OPENROUTER_API_KEY", "OPENROUTER_BASE_URL"),
+    "deepseek": ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL"),
+    "gemini": ("GEMINI_API_KEY", "GEMINI_BASE_URL"),
+    "groq": ("GROQ_API_KEY", "GROQ_BASE_URL"),
+    "dashscope": ("DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL"),
+    "qwen": ("DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL"),
+    "zhipu": ("ZHIPU_API_KEY", "ZHIPU_BASE_URL"),
+    "moonshot": ("MOONSHOT_API_KEY", "MOONSHOT_BASE_URL"),
+    "minimax": ("MINIMAX_API_KEY", "MINIMAX_BASE_URL"),
+    "mimo": ("MIMO_API_KEY", "MIMO_BASE_URL"),
+    "zai": ("ZAI_API_KEY", "ZAI_BASE_URL"),
+    "ollama": (None, "OLLAMA_BASE_URL"),
+}
 
 # .env search order: ~/.vibe-trading/.env → agent/.env → $CWD/.env
 _ENV_CANDIDATES = [
@@ -136,30 +190,13 @@ def _sync_provider_env() -> None:
     provider = os.getenv("LANGCHAIN_PROVIDER", "openai").lower()
 
     if provider in {"openai-codex", "openai_codex"}:
-        codex_url = os.getenv("OPENAI_CODEX_BASE_URL", "https://chatgpt.com/backend-api/codex/responses")
+        codex_url = os.getenv("OPENAI_CODEX_BASE_URL", DEFAULT_CODEX_URL)
         os.environ["OPENAI_API_BASE"] = codex_url
         os.environ["OPENAI_BASE_URL"] = codex_url
         os.environ.pop("OPENAI_API_KEY", None)
         return
 
-    # (api_key_env, base_url_env)
-    _PROVIDER_MAP: dict[str, tuple[str | None, str]] = {
-        "openai":     ("OPENAI_API_KEY",     "OPENAI_BASE_URL"),
-        "openrouter": ("OPENROUTER_API_KEY",  "OPENROUTER_BASE_URL"),
-        "deepseek":   ("DEEPSEEK_API_KEY",    "DEEPSEEK_BASE_URL"),
-        "gemini":     ("GEMINI_API_KEY",      "GEMINI_BASE_URL"),
-        "groq":       ("GROQ_API_KEY",        "GROQ_BASE_URL"),
-        "dashscope":  ("DASHSCOPE_API_KEY",   "DASHSCOPE_BASE_URL"),
-        "qwen":       ("DASHSCOPE_API_KEY",   "DASHSCOPE_BASE_URL"),
-        "zhipu":      ("ZHIPU_API_KEY",       "ZHIPU_BASE_URL"),
-        "moonshot":   ("MOONSHOT_API_KEY",    "MOONSHOT_BASE_URL"),
-        "minimax":    ("MINIMAX_API_KEY",     "MINIMAX_BASE_URL"),
-        "mimo":       ("MIMO_API_KEY",        "MIMO_BASE_URL"),
-        "zai":        ("ZAI_API_KEY",         "ZAI_BASE_URL"),
-        "ollama":     (None,                  "OLLAMA_BASE_URL"),
-    }
-
-    spec = _PROVIDER_MAP.get(provider, _PROVIDER_MAP["openai"])
+    spec = PROVIDER_MAP.get(provider, PROVIDER_MAP["openai"])
     key_env, base_env = spec
 
     # Resolve API key: provider-specific env → OPENAI_API_KEY fallback
@@ -178,6 +215,221 @@ def _sync_provider_env() -> None:
         os.environ.setdefault("OPENAI_BASE_URL", base_url)
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _provider_env(provider: str) -> tuple[str, str]:
+    normalized = provider.replace("_", "-").lower()
+    if normalized == "openai-codex":
+        return "", os.getenv("OPENAI_CODEX_BASE_URL", DEFAULT_CODEX_URL)
+
+    key_env, base_env = PROVIDER_MAP.get(normalized, PROVIDER_MAP["openai"])
+    if key_env is not None:
+        api_key = os.getenv(key_env, "") or os.getenv("OPENAI_API_KEY", "")
+    else:
+        api_key = os.getenv("OPENAI_API_KEY", "") or "ollama"
+    base_url = os.getenv(base_env, "") or os.getenv("OPENAI_BASE_URL", "") or os.getenv("OPENAI_API_BASE", "")
+    return api_key, base_url
+
+
+def _apply_provider_env(provider: str) -> None:
+    api_key, base_url = _provider_env(provider)
+    if provider.replace("_", "-").lower() == "openai-codex":
+        os.environ.pop("OPENAI_API_KEY", None)
+    elif api_key:
+        os.environ["OPENAI_API_KEY"] = api_key
+    if base_url:
+        os.environ["OPENAI_API_BASE"] = base_url
+        os.environ["OPENAI_BASE_URL"] = base_url
+
+
+def _fallback_model_env(provider: str) -> str:
+    return provider.replace("-", "_").upper() + "_FALLBACK_MODEL"
+
+
+@dataclass(frozen=True)
+class LLMCandidate:
+    provider: str
+    model: str
+
+
+def _fallback_chain(primary_provider: str, primary_model: str) -> list[LLMCandidate]:
+    raw_chain = os.getenv("LLM_FALLBACK_CHAIN", ",".join(DEFAULT_FALLBACK_CHAIN))
+    chain = [item.strip().replace("_", "-").lower() for item in raw_chain.split(",") if item.strip()]
+    if not chain:
+        return [LLMCandidate(primary_provider, primary_model)]
+
+    primary = primary_provider.replace("_", "-").lower()
+    if primary not in chain or primary != chain[0]:
+        return [LLMCandidate(primary, primary_model)]
+
+    ordered = list(chain)
+    candidates: list[LLMCandidate] = []
+    for provider in ordered:
+        default_model = DEFAULT_FALLBACK_MODELS.get(provider, primary_model)
+        model = os.getenv(_fallback_model_env(provider), "").strip() or default_model
+        if provider == primary:
+            model = primary_model
+        candidates.append(LLMCandidate(provider, model))
+    return candidates
+
+
+def _is_retryable_llm_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    if any(marker in text for marker in NON_RETRYABLE_ERROR_MARKERS):
+        return False
+    if any(f"http {code}" in text or f"status {code}" in text or f" {code} " in text for code in RETRYABLE_STATUS_CODES):
+        return True
+    return any(marker in text for marker in RETRYABLE_ERROR_MARKERS)
+
+
+def _sanitize_error(exc: Exception) -> str:
+    text = " ".join(str(exc).split())
+    return text[:240] + ("..." if len(text) > 240 else "")
+
+
+def _build_provider_llm(
+    *,
+    provider: str,
+    model_name: str,
+    callbacks: Any = None,
+    tools: Optional[list[dict[str, Any]]] = None,
+) -> Any:
+    provider = provider.replace("_", "-").lower()
+    temperature = float(os.getenv("LANGCHAIN_TEMPERATURE", "0.0"))
+    timeout = int(os.getenv("TIMEOUT_SECONDS", "120"))
+    effort = os.getenv("LANGCHAIN_REASONING_EFFORT", "").strip().lower()
+    api_key, base_url = _provider_env(provider)
+    _apply_provider_env(provider)
+
+    if provider == "openai-codex":
+        from src.providers.openai_codex import OpenAICodexLLM
+
+        return OpenAICodexLLM(
+            model=model_name,
+            temperature=temperature,
+            timeout=timeout,
+            tools=tools,
+            reasoning_effort=effort or None,
+        )
+
+    if ChatOpenAI is None:
+        raise RuntimeError("langchain-openai is not installed")
+    if provider == "minimax" and temperature <= 0.0:
+        temperature = 0.01
+    kwargs: dict[str, Any] = {
+        "model": model_name,
+        "temperature": temperature,
+        "timeout": timeout,
+        "max_retries": int(os.getenv("MAX_RETRIES", "2")),
+        "callbacks": callbacks,
+        "extra_body": {"reasoning": {"effort": effort}} if effort else None,
+    }
+    if api_key:
+        kwargs["api_key"] = api_key
+    if base_url:
+        kwargs["base_url"] = base_url
+    llm = ChatOpenAIWithReasoning(**kwargs)
+    return llm.bind_tools(tools) if tools else llm
+
+
+class FallbackChatLLM:
+    """LangChain-like chat model that advances through provider candidates."""
+
+    def __init__(
+        self,
+        candidates: Iterable[LLMCandidate],
+        *,
+        callbacks: Any = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+    ) -> None:
+        self.candidates = list(candidates)
+        self.callbacks = callbacks
+        self.tools = tools
+        self._clients = [
+            _build_provider_llm(
+                provider=c.provider,
+                model_name=c.model,
+                callbacks=callbacks,
+                tools=tools,
+            )
+            for c in self.candidates
+        ]
+
+    @property
+    def model_name(self) -> str:
+        return self.candidates[0].model if self.candidates else ""
+
+    def bind_tools(self, tools: list[dict[str, Any]]) -> "FallbackChatLLM":
+        return FallbackChatLLM(self.candidates, callbacks=self.callbacks, tools=tools)
+
+    @staticmethod
+    def _tag_message(message: Any, candidate: LLMCandidate) -> Any:
+        additional = getattr(message, "additional_kwargs", None)
+        if isinstance(additional, dict):
+            additional["provider"] = candidate.provider
+            additional["model"] = candidate.model
+        metadata = getattr(message, "response_metadata", None)
+        if isinstance(metadata, dict):
+            metadata["provider"] = candidate.provider
+            metadata["model"] = candidate.model
+        return message
+
+    def _run_with_fallback(self, operation: str, runner: Any) -> Any:
+        last_exc: Exception | None = None
+        for idx, (candidate, client) in enumerate(zip(self.candidates, self._clients)):
+            try:
+                return self._tag_message(runner(client), candidate)
+            except Exception as exc:
+                last_exc = exc
+                if idx == len(self._clients) - 1 or not _is_retryable_llm_error(exc):
+                    raise
+                next_candidate = self.candidates[idx + 1]
+                logger.warning(
+                    "LLM %s failed for %s/%s; falling back to %s/%s: %s",
+                    operation,
+                    candidate.provider,
+                    candidate.model,
+                    next_candidate.provider,
+                    next_candidate.model,
+                    _sanitize_error(exc),
+                )
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("No LLM fallback candidates configured")
+
+    def invoke(self, messages: list[dict[str, Any]], config: Optional[dict[str, Any]] = None) -> Any:
+        return self._run_with_fallback("invoke", lambda client: client.invoke(messages, config=config))
+
+    async def ainvoke(self, messages: list[dict[str, Any]], config: Optional[dict[str, Any]] = None) -> Any:
+        return await asyncio.to_thread(self.invoke, messages, config)
+
+    def stream(self, messages: list[dict[str, Any]], config: Optional[dict[str, Any]] = None) -> Iterable[Any]:
+        for idx, (candidate, client) in enumerate(zip(self.candidates, self._clients)):
+            yielded = False
+            try:
+                for chunk in client.stream(messages, config=config):
+                    yielded = True
+                    yield self._tag_message(chunk, candidate)
+                return
+            except Exception as exc:
+                if yielded or idx == len(self._clients) - 1 or not _is_retryable_llm_error(exc):
+                    raise
+                next_candidate = self.candidates[idx + 1]
+                logger.warning(
+                    "LLM stream failed for %s/%s; falling back to %s/%s: %s",
+                    candidate.provider,
+                    candidate.model,
+                    next_candidate.provider,
+                    next_candidate.model,
+                    _sanitize_error(exc),
+                )
+
+
 def build_llm(*, model_name: Optional[str] = None, callbacks: Any = None) -> Any:
     """Construct a ChatOpenAI instance.
 
@@ -191,40 +443,15 @@ def build_llm(*, model_name: Optional[str] = None, callbacks: Any = None) -> Any
     Raises:
         RuntimeError: If langchain-openai is missing or LANGCHAIN_MODEL_NAME is unset.
     """
-    _sync_provider_env()
+    _ensure_dotenv()
     name = model_name or os.getenv("LANGCHAIN_MODEL_NAME", "").strip()
     if not name:
         raise RuntimeError("LANGCHAIN_MODEL_NAME is not set")
-    temperature = float(os.getenv("LANGCHAIN_TEMPERATURE", "0.0"))
-    provider = os.getenv("LANGCHAIN_PROVIDER", "openai").lower()
-    if provider in {"openai-codex", "openai_codex"}:
-        from src.providers.openai_codex import OpenAICodexLLM
-
-        effort = os.getenv("LANGCHAIN_REASONING_EFFORT", "").strip().lower()
-        return OpenAICodexLLM(
-            model=name,
-            temperature=temperature,
-            timeout=int(os.getenv("TIMEOUT_SECONDS", "120")),
-            reasoning_effort=effort or None,
-        )
-
-    if ChatOpenAI is None:
-        raise RuntimeError("langchain-openai is not installed")
-    # MiniMax requires temperature in (0.0, 1.0] — clamp to 0.01 when the
-    # default 0.0 is used to avoid an API validation error.
-    if provider == "minimax" and temperature <= 0.0:
-        temperature = 0.01
-    # Optional reasoning activation for relays requiring opt-in (e.g. OpenRouter).
-    # Moonshot/DeepSeek official APIs emit reasoning by default and ignore this field.
-    effort = os.getenv("LANGCHAIN_REASONING_EFFORT", "").strip().lower()
-    return ChatOpenAIWithReasoning(
-        model=name,
-        temperature=temperature,
-        timeout=int(os.getenv("TIMEOUT_SECONDS", "120")),
-        max_retries=int(os.getenv("MAX_RETRIES", "2")),
-        callbacks=callbacks,
-        extra_body={"reasoning": {"effort": effort}} if effort else None,
-    )
+    provider = os.getenv("LANGCHAIN_PROVIDER", "openai").strip().replace("_", "-").lower()
+    candidates = _fallback_chain(provider, name) if _env_flag("LLM_FALLBACK_ENABLED", True) else [
+        LLMCandidate(provider, name)
+    ]
+    return FallbackChatLLM(candidates, callbacks=callbacks)
 
 
 def _extract_balanced_json(text: str) -> Optional[Dict[str, Any]]:

@@ -44,8 +44,10 @@ def test_build_llm_returns_codex_adapter(monkeypatch: pytest.MonkeyPatch) -> Non
 
     adapter = llm_mod.build_llm()
 
-    assert isinstance(adapter, OpenAICodexLLM)
-    assert adapter.model == DEFAULT_CODEX_MODEL
+    assert isinstance(adapter, llm_mod.FallbackChatLLM)
+    assert len(adapter._clients) == 1
+    assert isinstance(adapter._clients[0], OpenAICodexLLM)
+    assert adapter._clients[0].model == DEFAULT_CODEX_MODEL
 
 
 def test_codex_body_strips_provider_prefix_and_converts_tools() -> None:

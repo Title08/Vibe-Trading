@@ -47,6 +47,8 @@ class LLMResponse:
         tool_calls: List of tool call requests.
         reasoning_content: Optional thinking trace surfaced by reasoning models.
         finish_reason: Finish reason string.
+        provider: Provider that produced the response, when available.
+        model: Model that produced the response, when available.
         usage_metadata: Real token counts reported by the provider, when
             available. Mirrors LangChain's ``AIMessage.usage_metadata`` —
             ``{"input_tokens": int, "output_tokens": int, "total_tokens": int}``.
@@ -58,6 +60,8 @@ class LLMResponse:
     tool_calls: List[ToolCallRequest] = field(default_factory=list)
     reasoning_content: Optional[str] = None
     finish_reason: str = "stop"
+    provider: Optional[str] = None
+    model: Optional[str] = None
     usage_metadata: Optional[Dict[str, int]] = None
 
     @property
@@ -175,15 +179,19 @@ class ChatLLM:
                 usage = dict(usage)
             except (TypeError, ValueError):
                 usage = None
+        additional_kwargs = getattr(ai_message, "additional_kwargs", {}) or {}
+        response_metadata = getattr(ai_message, "response_metadata", {}) or {}
         return LLMResponse(
             content=ai_message.content,
             tool_calls=[
                 ToolCallRequest(id=tc["id"], name=tc["name"], arguments=tc["args"])
                 for tc in ai_message.tool_calls
             ],
-            reasoning_content=ai_message.additional_kwargs.get("reasoning_content"),
+            reasoning_content=additional_kwargs.get("reasoning_content"),
             finish_reason=_dedupe_finish_reason(
-                ai_message.response_metadata.get("finish_reason", "stop")
+                response_metadata.get("finish_reason", "stop")
             ),
+            provider=additional_kwargs.get("provider") or response_metadata.get("provider"),
+            model=additional_kwargs.get("model") or response_metadata.get("model"),
             usage_metadata=usage,
         )

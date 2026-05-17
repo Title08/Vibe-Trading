@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 import pytest
 
-from src.providers.llm import _extract_balanced_json, _sync_provider_env, build_llm
+from src.providers.llm import (
+    FallbackChatLLM,
+    LLMCandidate,
+    _extract_balanced_json,
+    _sync_provider_env,
+    build_llm,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +235,203 @@ class TestReasoningEffortPassthrough:
             "LANGCHAIN_REASONING_EFFORT": "HIGH",
         })
         assert captured["extra_body"]["reasoning"]["effort"] == "high"
+
+
+class TestProviderFallback:
+    """Fallback chain behavior for OpenRouter -> Groq -> OpenAI Codex."""
+
+    def _build_with_fake_provider(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+        *,
+        failures: dict[str, Exception] | None = None,
+    ) -> tuple[FallbackChatLLM, list[tuple[str, str, object]]]:
+        import src.providers.llm as llm_mod
+
+        llm_mod._dotenv_loaded = True
+        failures = failures or {}
+        calls: list[tuple[str, str, object]] = []
+
+        class _FakeProviderLLM:
+            def __init__(self, provider: str, model: str, tools: object = None) -> None:
+                self.provider = provider
+                self.model = model
+                self.tools = tools
+
+            def bind_tools(self, tools: object) -> "_FakeProviderLLM":
+                return _FakeProviderLLM(self.provider, self.model, tools)
+
+            def invoke(self, messages: object, config: object = None) -> str:
+                calls.append((self.provider, self.model, self.tools))
+                if self.provider in failures:
+                    raise failures[self.provider]
+                return f"ok:{self.provider}:{self.model}"
+
+            def stream(self, messages: object, config: object = None):
+                calls.append((self.provider, self.model, self.tools))
+                if self.provider in failures:
+                    raise failures[self.provider]
+                yield f"chunk:{self.provider}:{self.model}"
+
+        def _fake_build_provider_llm(*, provider: str, model_name: str, callbacks: object = None, tools: object = None):
+            return _FakeProviderLLM(provider, model_name, tools)
+
+        monkeypatch.setattr(llm_mod, "_build_provider_llm", _fake_build_provider_llm)
+        with patch.dict(os.environ, env, clear=True):
+            llm = build_llm()
+        return llm, calls
+
+    def test_default_chain_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        llm, _ = self._build_with_fake_provider(
+            monkeypatch,
+            {
+                "LANGCHAIN_PROVIDER": "openrouter",
+                "LANGCHAIN_MODEL_NAME": "deepseek/custom-primary",
+                "OPENROUTER_API_KEY": "or-test",
+                "GROQ_API_KEY": "gsk-test",
+            },
+        )
+
+        assert isinstance(llm, FallbackChatLLM)
+        assert llm.candidates == [
+            LLMCandidate("openrouter", "deepseek/custom-primary"),
+            LLMCandidate("groq", "llama-3.3-70b-versatile"),
+            LLMCandidate("openai-codex", "openai-codex/gpt-5.3-codex"),
+        ]
+
+    def test_retryable_429_advances_to_groq(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        llm, calls = self._build_with_fake_provider(
+            monkeypatch,
+            {
+                "LANGCHAIN_PROVIDER": "openrouter",
+                "LANGCHAIN_MODEL_NAME": "deepseek/deepseek-v3.2",
+            },
+            failures={"openrouter": RuntimeError("HTTP 429: rate limit exceeded")},
+        )
+
+        assert llm.invoke([{"role": "user", "content": "hi"}]) == "ok:groq:llama-3.3-70b-versatile"
+        assert [provider for provider, _, _ in calls] == ["openrouter", "groq"]
+
+    def test_retryable_groq_failure_advances_to_codex(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        llm, calls = self._build_with_fake_provider(
+            monkeypatch,
+            {
+                "LANGCHAIN_PROVIDER": "openrouter",
+                "LANGCHAIN_MODEL_NAME": "deepseek/deepseek-v3.2",
+            },
+            failures={
+                "openrouter": RuntimeError("HTTP 429: quota exceeded"),
+                "groq": RuntimeError("HTTP 503: temporarily unavailable"),
+            },
+        )
+
+        assert llm.invoke([{"role": "user", "content": "hi"}]) == "ok:openai-codex:openai-codex/gpt-5.3-codex"
+        assert [provider for provider, _, _ in calls] == ["openrouter", "groq", "openai-codex"]
+
+    def test_non_retryable_error_does_not_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        llm, calls = self._build_with_fake_provider(
+            monkeypatch,
+            {
+                "LANGCHAIN_PROVIDER": "openrouter",
+                "LANGCHAIN_MODEL_NAME": "deepseek/deepseek-v3.2",
+            },
+            failures={"openrouter": RuntimeError("invalid api key")},
+        )
+
+        with pytest.raises(RuntimeError, match="invalid api key"):
+            llm.invoke([{"role": "user", "content": "hi"}])
+        assert [provider for provider, _, _ in calls] == ["openrouter"]
+
+    def test_fallback_can_be_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        llm, _ = self._build_with_fake_provider(
+            monkeypatch,
+            {
+                "LANGCHAIN_PROVIDER": "openrouter",
+                "LANGCHAIN_MODEL_NAME": "deepseek/deepseek-v3.2",
+                "LLM_FALLBACK_ENABLED": "false",
+            },
+        )
+
+        assert isinstance(llm, FallbackChatLLM)
+        assert llm.candidates == [LLMCandidate("openrouter", "deepseek/deepseek-v3.2")]
+
+    def test_custom_fallback_models_are_honored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        llm, _ = self._build_with_fake_provider(
+            monkeypatch,
+            {
+                "LANGCHAIN_PROVIDER": "openrouter",
+                "LANGCHAIN_MODEL_NAME": "primary-model",
+                "GROQ_FALLBACK_MODEL": "groq/custom",
+                "OPENAI_CODEX_FALLBACK_MODEL": "openai-codex/custom",
+            },
+        )
+
+        assert isinstance(llm, FallbackChatLLM)
+        assert llm.candidates == [
+            LLMCandidate("openrouter", "primary-model"),
+            LLMCandidate("groq", "groq/custom"),
+            LLMCandidate("openai-codex", "openai-codex/custom"),
+        ]
+
+    def test_bind_tools_preserves_tools_across_candidates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        llm, calls = self._build_with_fake_provider(
+            monkeypatch,
+            {
+                "LANGCHAIN_PROVIDER": "openrouter",
+                "LANGCHAIN_MODEL_NAME": "deepseek/deepseek-v3.2",
+            },
+            failures={"openrouter": RuntimeError("HTTP 429: rate limit exceeded")},
+        )
+
+        tools = [{"type": "function", "function": {"name": "lookup"}}]
+        bound = llm.bind_tools(tools)
+        assert bound.invoke([{"role": "user", "content": "hi"}]) == "ok:groq:llama-3.3-70b-versatile"
+        assert calls == [("openrouter", "deepseek/deepseek-v3.2", tools), ("groq", "llama-3.3-70b-versatile", tools)]
+
+    def test_successful_candidate_tags_provider_and_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import src.providers.llm as llm_mod
+
+        llm_mod._dotenv_loaded = True
+
+        class _FakeMessage:
+            content = "done"
+            tool_calls: list = []
+            additional_kwargs: dict = {}
+            response_metadata: dict = {"finish_reason": "stop"}
+            usage_metadata = None
+
+        class _FakeProviderLLM:
+            def __init__(self, provider: str, model: str) -> None:
+                self.provider = provider
+                self.model = model
+
+            def bind_tools(self, tools: object) -> "_FakeProviderLLM":
+                return self
+
+            def invoke(self, messages: object, config: object = None) -> _FakeMessage:
+                if self.provider == "openrouter":
+                    raise RuntimeError("HTTP 429: rate limit exceeded")
+                return _FakeMessage()
+
+            def stream(self, messages: object, config: object = None):
+                yield self.invoke(messages, config=config)
+
+        def _fake_build_provider_llm(*, provider: str, model_name: str, callbacks: object = None, tools: object = None):
+            return _FakeProviderLLM(provider, model_name)
+
+        monkeypatch.setattr(llm_mod, "_build_provider_llm", _fake_build_provider_llm)
+        with patch.dict(os.environ, {
+            "LANGCHAIN_PROVIDER": "openrouter",
+            "LANGCHAIN_MODEL_NAME": "deepseek/deepseek-v3.2",
+        }, clear=True):
+            parsed = build_llm().invoke([{"role": "user", "content": "hi"}])
+
+        from src.providers.chat import ChatLLM
+
+        response = ChatLLM._parse_response(parsed)
+        assert response.provider == "groq"
+        assert response.model == "llama-3.3-70b-versatile"
 
 
 class TestExtractBalancedJson:
