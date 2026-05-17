@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useSearchParams } from "react-router-dom";
 import {
   BarChart3,
@@ -108,7 +108,7 @@ export function Layout() {
       await api.renameSession(sid, renameValue.trim());
       setSessions((prev) =>
         prev.map((s) =>
-          s.session_id === sid ? { ...s, title: renameValue.trim() } : s,
+          s.session_id === sid ? { ...s, title: renameValue.trim(), is_locked: true } : s,
         ),
       );
     } catch {

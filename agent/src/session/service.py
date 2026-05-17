@@ -233,6 +233,11 @@ class SessionService:
                  "provider": result.get("provider"), "model": result.get("model")},
             )
 
+            if not session.is_locked:
+                attempts = self.store.list_attempts(session.session_id)
+                if len(attempts) == 1:
+                    asyncio.create_task(self._auto_rename_session(session.session_id, attempt.prompt, reply.content))
+
         except Exception as exc:
             attempt.mark_failed(error=str(exc))
             self.store.update_attempt(attempt)
@@ -290,6 +295,7 @@ class SessionService:
                 include_shell_tools=include_shell_tools,
                 agent_config=agent_config,
                 warn_callback=_mcp_collision_warn,
+                session_id=session_id,
             ),
             llm=llm,
             event_callback=event_callback,
@@ -321,6 +327,35 @@ class SessionService:
                 result["metrics"] = metrics
 
         return result
+
+    async def _auto_rename_session(self, session_id: str, prompt: str, content: str) -> None:
+        """Generate a concise title for the session asynchronously."""
+        try:
+            from src.providers.chat import ChatLLM
+            llm = ChatLLM()
+            prompt_text = (
+                f"Generate a concise, 2-5 word title for a chat session.\n\n"
+                f"User: {prompt[:500]}\n\n"
+                f"Assistant: {content[:1000]}\n\n"
+                f"Title:"
+            )
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                _AGENT_EXECUTOR,
+                lambda: llm.chat([{"role": "user", "content": prompt_text}])
+            )
+            if result and result.content:
+                title = result.content.strip().strip('"').strip("'")
+                if title:
+                    session = self.store.get_session(session_id)
+                    if session and not session.is_locked:
+                        session.title = title
+                        session.updated_at = datetime.now().isoformat()
+                        self.store.update_session(session)
+                        self.event_bus.emit(session_id, "session.updated", {"session_id": session_id, "title": title})
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Auto-rename failed: {e}")
 
     @staticmethod
     def _convert_messages_to_history(messages: list) -> list[Dict[str, Any]]:

@@ -49,6 +49,7 @@ class Session:
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_attempt_id: Optional[str] = None
     config: Dict[str, Any] = field(default_factory=dict)
+    is_locked: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the session to a dictionary.

@@ -75,7 +75,7 @@ export const api = {
   listSessions: () => request<SessionItem[]>("/sessions"),
   createSession: (title?: string) => request<SessionItem>("/sessions", { method: "POST", body: JSON.stringify({ title: title || "" }) }),
   deleteSession: (sid: string) => request<{ status: string }>(`/sessions/${sid}`, { method: "DELETE" }),
-  renameSession: (sid: string, title: string) => request<{ status: string }>(`/sessions/${sid}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  renameSession: (sid: string, title: string) => request<{ status: string }>(`/sessions/${sid}`, { method: "PATCH", body: JSON.stringify({ title, is_locked: true }) }),
   sendMessage: (sid: string, content: string) => request<{ message_id: string; attempt_id: string }>(`/sessions/${sid}/messages`, { method: "POST", body: JSON.stringify({ content }) }),
   cancelSession: (sid: string) => request<{ status: string }>(`/sessions/${sid}/cancel`, { method: "POST" }),
   getSessionMessages: (sid: string) => request<MessageItem[]>(`/sessions/${sid}/messages`),
@@ -367,6 +367,7 @@ export interface SessionItem {
   created_at?: string;
   updated_at?: string;
   last_attempt_id?: string;
+  is_locked?: boolean;
 }
 
 // --- Alpha Zoo types ---

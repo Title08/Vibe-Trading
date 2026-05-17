@@ -1373,6 +1373,7 @@ async def delete_session(session_id: str):
 class UpdateSessionRequest(BaseModel):
     """Session update fields."""
     title: Optional[str] = None
+    is_locked: Optional[bool] = None
 
 
 @app.patch("/sessions/{session_id}", dependencies=[Depends(require_auth)])
@@ -1387,6 +1388,8 @@ async def update_session(session_id: str, req: UpdateSessionRequest):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     if req.title is not None:
         session.title = req.title
+    if req.is_locked is not None:
+        session.is_locked = req.is_locked
     from datetime import datetime
     session.updated_at = datetime.now().isoformat()
     svc.store.update_session(session)

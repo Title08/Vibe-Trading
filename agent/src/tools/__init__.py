@@ -68,6 +68,7 @@ def build_registry(
     include_shell_tools: bool = False,
     agent_config: "AgentConfig | None" = None,
     warn_callback: Callable[[str], None] | None = None,
+    session_id: str | None = None,
 ) -> ToolRegistry:
     """Build the tool registry via auto-discovery, optionally enriched with MCP tools.
 
@@ -100,6 +101,7 @@ def build_registry(
     """
     from src.tools.remember_tool import RememberTool
     from src.tools.swarm_tool import SwarmTool
+    from src.tools.rename_session_tool import RenameSessionTool
 
     registry = ToolRegistry()
     for cls in _discover_subclasses():
@@ -114,6 +116,8 @@ def build_registry(
                 registry.register(cls(memory=persistent_memory))
             elif cls is SwarmTool:
                 registry.register(cls(include_shell_tools=include_shell_tools))
+            elif cls is RenameSessionTool:
+                registry.register(cls(session_id=session_id))
             else:
                 registry.register(cls())
         except Exception as exc:
