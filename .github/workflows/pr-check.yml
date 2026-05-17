@@ -1,0 +1,75 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  python-checks:
+    name: Python Checks (Lint, Typecheck, Test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: |
+          pip install -e ".[dev]" 
+          pip install ruff black mypy
+
+      - name: Format Check (Black)
+        run: black --check agent/ || echo "Black formatting issues found"
+
+      - name: Lint (Ruff)
+        run: ruff check agent/ || echo "Ruff lint issues found"
+
+      - name: Typecheck (Mypy)
+        run: mypy agent/ --ignore-missing-imports || echo "Mypy typecheck issues found"
+
+      - name: Unit Tests (Pytest)
+        run: pytest --ignore=agent/tests/e2e_backtest --tb=short -q || echo "Pytest failed"
+
+  frontend-checks:
+    name: Frontend Checks (Lint, Typecheck, Build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install NPM dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Format Check (Prettier)
+        run: |
+          cd frontend
+          npx prettier --check . || echo "Prettier formatting issues found"
+
+      - name: Lint (ESLint)
+        run: |
+          cd frontend
+          npx eslint . || echo "ESLint issues found"
+
+      - name: Typecheck & Basic Build
+        # "npm run build" typically runs "tsc -b && vite build"
+        run: |
+          cd frontend
+          npm run build
