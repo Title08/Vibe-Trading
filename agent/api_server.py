@@ -1757,6 +1757,12 @@ def serve_main(argv: list[str] | None = None) -> int:
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else 2
 
+    from src.dns_resolver import DNS_SERVERS_ENV, install_dns_override
+
+    dns_servers = install_dns_override(os.getenv(DNS_SERVERS_ENV))
+    if dns_servers:
+        print(f"DNS override: {', '.join(dns_servers)}")
+
     frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
     frontend_root = Path(__file__).resolve().parent.parent / "frontend"
 

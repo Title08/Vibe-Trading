@@ -1,5 +1,8 @@
 services:
   vibe-trading:
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     build: .
     ports:
       - "127.0.0.1:8899:8899"
