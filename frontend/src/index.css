@@ -5,68 +5,95 @@
 @layer base {
   :root {
     /* Light mode surfaces */
-    --background: 220 20% 98%;
-    --foreground: 220 20% 10%;
+    --background: 218 31% 97%;
+    --foreground: 222 47% 9%;
     --card: 0 0% 100%;
-    --card-foreground: 220 20% 10%;
+    --card-foreground: 222 47% 9%;
 
     /* Brand accent */
-    --primary: 27 90% 52%;
+    --primary: 38 92% 50%;
     --primary-foreground: 0 0% 100%;
 
-    --muted: 220 14% 92%;
-    --muted-foreground: 220 14% 46%;
+    --muted: 218 22% 91%;
+    --muted-foreground: 222 18% 38%;
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 14% 87%;
+    --border: 218 18% 82%;
     --radius: 0.5rem;
 
     /* Semantic colors */
-    --success: 142 71% 45%;
+    --success: 151 70% 38%;
     --danger: 0 84% 60%;
     --warning: 38 92% 50%;
-    --info: 217 91% 60%;
+    --info: 190 95% 40%;
 
     /* Chart tokens */
-    --chart-grid: 220 14% 90%;
-    --chart-text: 220 14% 46%;
-    --chart-axis: 220 14% 80%;
-    --chart-compare-a: #3b82f6;
+    --chart-grid: 218 18% 86%;
+    --chart-text: 222 18% 38%;
+    --chart-axis: 218 18% 76%;
+    --chart-compare-a: #0891b2;
     --chart-compare-b: #f59e0b;
+
+    --glass: 0 0% 100%;
+    --glass-border: 218 18% 78%;
+    --accent-ai: 262 83% 58%;
+    --accent-cyan: 190 95% 40%;
   }
 
   .dark {
     /* Dark mode: 4-level surface system */
-    --background: 220 20% 5%;       /* bg-base */
-    --foreground: 220 10% 92%;
-    --card: 220 20% 8%;             /* surface-1 */
-    --card-foreground: 220 10% 92%;
+    --background: 222 47% 5%;
+    --foreground: 213 31% 94%;
+    --card: 222 42% 8%;
+    --card-foreground: 213 31% 94%;
 
-    --primary: 27 90% 52%;
+    --primary: 38 92% 50%;
     --primary-foreground: 0 0% 100%;
 
-    --muted: 220 20% 13%;           /* surface-2 */
-    --muted-foreground: 220 10% 55%;
+    --muted: 222 38% 13%;
+    --muted-foreground: 215 16% 68%;
     --destructive: 0 62% 50%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 20% 18%;          /* surface-3 */
+    --border: 222 32% 20%;
 
     /* Semantic colors */
-    --success: 142 71% 45%;
+    --success: 151 70% 46%;
     --danger: 0 62% 50%;
     --warning: 38 92% 50%;
-    --info: 217 91% 60%;
+    --info: 190 95% 55%;
 
     /* Chart tokens */
-    --chart-grid: 220 20% 12%;
-    --chart-text: 220 10% 42%;
-    --chart-axis: 220 20% 22%;
-    --chart-compare-a: #60a5fa;
+    --chart-grid: 222 32% 15%;
+    --chart-text: 215 16% 66%;
+    --chart-axis: 222 28% 26%;
+    --chart-compare-a: #22d3ee;
     --chart-compare-b: #fbbf24;
+
+    --glass: 222 42% 10%;
+    --glass-border: 213 31% 24%;
+    --accent-ai: 262 83% 66%;
+    --accent-cyan: 190 95% 55%;
   }
 
   * { @apply border-border; }
-  body { @apply bg-background text-foreground; }
+  html, body, #root {
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    background-image:
+      linear-gradient(135deg, hsl(var(--background)) 0%, hsl(var(--muted) / 0.35) 100%),
+      linear-gradient(hsl(var(--border) / 0.08) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.08) 1px, transparent 1px);
+    background-size: auto, 40px 40px, 40px 40px;
+  }
+
+  button, a, input, textarea, select {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
 
   /* Prose table enhancements */
   .prose table { border-collapse: collapse; width: 100%; }
@@ -78,4 +105,25 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
+}
+
+@layer components {
+  .glass-panel {
+    @apply border shadow-[0_24px_80px_-48px_rgba(0,0,0,0.65)] backdrop-blur-xl;
+    background: hsl(var(--glass) / 0.74);
+    border-color: hsl(var(--glass-border) / 0.68);
+  }
+
+  .glass-panel-soft {
+    @apply border shadow-[0_16px_52px_-42px_rgba(0,0,0,0.55)] backdrop-blur-lg;
+    background: hsl(var(--glass) / 0.52);
+    border-color: hsl(var(--glass-border) / 0.48);
+  }
+
+  .market-grid {
+    background-image:
+      linear-gradient(hsl(var(--border) / 0.08) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.08) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
 }

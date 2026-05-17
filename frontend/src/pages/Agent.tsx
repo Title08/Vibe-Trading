@@ -131,17 +131,19 @@ export function Agent() {
         const meta = m.metadata as Record<string, unknown> | undefined;
         const runId = meta?.run_id as string | undefined;
         const metrics = meta?.metrics as Record<string, number> | undefined;
+        const provider = meta?.provider as string | undefined;
+        const model = meta?.model as string | undefined;
         const ts = new Date(m.created_at).getTime();
         if (m.role === "user") {
           agentMsgs.push({ id: m.message_id, type: "user", content: m.content, timestamp: ts });
         } else if (runId) {
           // Show text answer first (if non-empty), then chart card
           if (m.content && m.content !== "Strategy execution completed.") {
-            agentMsgs.push({ id: m.message_id + "_ans", type: "answer", content: m.content, timestamp: ts });
+            agentMsgs.push({ id: m.message_id + "_ans", type: "answer", content: m.content, provider, model, timestamp: ts });
           }
           agentMsgs.push({ id: m.message_id, type: "run_complete", content: "", runId, metrics, timestamp: ts + 1 });
         } else {
-          agentMsgs.push({ id: m.message_id, type: "answer", content: m.content, timestamp: ts });
+          agentMsgs.push({ id: m.message_id, type: "answer", content: m.content, provider, model, timestamp: ts });
         }
       }
       if (genRef.current !== gen) return;
@@ -211,7 +213,9 @@ export function Agent() {
         const runDir = String(d.run_dir || "");
         const runId = runDir ? runDir.split(/[/\\]/).pop() : undefined;
         const summary = String(d.summary || "");
-        if (summary) s.addMessage({ id: "", type: "answer", content: summary, timestamp: Date.now() });
+        const provider = typeof d.provider === "string" ? d.provider : undefined;
+        const model = typeof d.model === "string" ? d.model : undefined;
+        if (summary) s.addMessage({ id: "", type: "answer", content: summary, provider, model, timestamp: Date.now() });
 
         // Detect Shadow Account id if render_shadow_report fired successfully this turn
         const shadowCall = completedTools.find(
@@ -274,6 +278,9 @@ export function Agent() {
       } else {
         loadSessionMessages(urlSessionId, gen);
       }
+      setupSSE(urlSessionId);
+    } else if (urlSessionId && urlSessionId === curSid && curMsgs.length === 0 && !sessionLoading) {
+      loadSessionMessages(urlSessionId, gen);
       setupSSE(urlSessionId);
     } else if (!urlSessionId && curSid) {
       doDisconnect();
@@ -639,14 +646,14 @@ export function Agent() {
   const groups = useMemo(() => groupMessages(messages), [messages]);
 
   return (
-    <div className="flex flex-col flex-1 min-w-0 overflow-hidden h-full">
-      <div ref={listRef} className="flex-1 overflow-auto p-6 scroll-smooth relative">
-        <div className="max-w-3xl mx-auto space-y-4">
+    <div className="flex h-full w-full min-w-0 max-w-full flex-1 flex-col overflow-hidden">
+      <div ref={listRef} className="relative flex-1 overflow-auto overflow-x-hidden p-4 scroll-smooth md:p-6">
+        <div className="mx-auto w-full min-w-0 max-w-4xl space-y-4">
           {sessionLoading && (
             <div className="space-y-4 py-4">
               {[1, 2, 3].map(i => (
                 <div key={i} className="flex gap-3 animate-pulse">
-                  <div className="h-8 w-8 rounded-full bg-muted shrink-0" />
+                    <div className="h-8 w-8 shrink-0 rounded-lg bg-muted" />
                   <div className="flex-1 space-y-2">
                     <div className="h-4 bg-muted rounded w-3/4" />
                     <div className="h-3 bg-muted/60 rounded w-1/2" />
@@ -690,7 +697,7 @@ export function Agent() {
           {(streamingText || (status === "streaming" && toolCalls.length > 0)) && (
             <div className="flex gap-3">
               <AgentAvatar />
-              <div className="flex-1 min-w-0 space-y-1.5">
+                  <div className="glass-panel-soft flex-1 min-w-0 space-y-1.5 rounded-xl p-4">
                 {streamingText && (
                   <div className="prose prose-sm dark:prose-invert max-w-none leading-relaxed">
                     {streamingText}
@@ -701,7 +708,7 @@ export function Agent() {
                   const latest = toolCalls[toolCalls.length - 1];
                   const running = latest.status === "running";
                   return (
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <div className="flex items-center gap-2 rounded-lg border border-border/50 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
                       {running
                         ? <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0" />
                         : <CheckCircle2 className="h-3 w-3 text-success/60 shrink-0" />}
@@ -719,7 +726,7 @@ export function Agent() {
         {showScrollBtn && (
           <button
             onClick={forceScrollToBottom}
-            className="sticky bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs font-medium shadow-lg hover:opacity-90 transition-opacity z-10"
+            className="sticky bottom-4 left-1/2 z-10 flex -translate-x-1/2 cursor-pointer items-center gap-1 rounded-full border border-primary/30 bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-lg transition-opacity hover:opacity-90"
           >
             <ArrowDown className="h-3 w-3" /> New messages
           </button>
@@ -727,15 +734,15 @@ export function Agent() {
         <ConversationTimeline messages={messages} containerRef={listRef} />
       </div>
 
-      <form onSubmit={handleSubmit} className="border-t p-4 bg-background/80 backdrop-blur-sm">
-        <div className="max-w-3xl mx-auto space-y-2">
+      <form onSubmit={handleSubmit} className="border-t border-border/60 bg-background/70 p-3 backdrop-blur-xl md:p-4">
+        <div className="mx-auto w-full min-w-0 max-w-4xl space-y-2">
           {/* Swarm preset badge */}
           {swarmPreset && (
             <div className="flex items-center gap-1">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-500/10 text-violet-600 dark:text-violet-400 text-xs font-medium">
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-ai/25 bg-ai/10 px-2.5 py-1 text-xs font-medium text-ai">
                 <Users className="h-3 w-3" />
                 {swarmPreset.title}
-                <button type="button" onClick={() => setSwarmPreset(null)} className="hover:text-destructive transition-colors">
+                <button type="button" onClick={() => setSwarmPreset(null)} className="cursor-pointer transition-colors hover:text-destructive">
                   <X className="h-3 w-3" />
                 </button>
               </span>
@@ -744,10 +751,10 @@ export function Agent() {
           {/* Attachment badge */}
           {attachment && (
             <div className="flex items-center gap-1">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-primary/10 text-primary text-xs font-medium">
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
                 <Paperclip className="h-3 w-3" />
                 {attachment.filename}
-                <button type="button" onClick={() => setAttachment(null)} className="hover:text-destructive transition-colors">
+                <button type="button" onClick={() => setAttachment(null)} className="cursor-pointer transition-colors hover:text-destructive">
                   <X className="h-3 w-3" />
                 </button>
               </span>
@@ -760,29 +767,29 @@ export function Agent() {
               Uploading...
             </div>
           )}
-          <div className="flex gap-2 items-end">
+          <div className="glass-panel flex items-center gap-2 rounded-2xl p-2">
             {/* "+" menu: PDF upload + Swarm presets */}
             <div className="relative" ref={uploadMenuRef}>
               <button
                 type="button"
                 onClick={() => setShowUploadMenu(prev => !prev)}
                 disabled={status === "streaming" || uploading}
-                className="w-9 h-9 rounded-full border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 shrink-0"
+                className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-border/70 text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
                 title="More options"
               >
                 <Plus className="h-4 w-4" />
               </button>
               {showUploadMenu && (
-                <div className="absolute bottom-full left-0 mb-2 w-52 rounded-xl border bg-background/95 backdrop-blur-sm shadow-lg py-1 z-50">
+                <div className="glass-panel absolute bottom-full left-0 z-50 mb-2 w-56 overflow-hidden rounded-xl py-1 shadow-lg">
                   <button
                     type="button"
                     onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
+                    className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
                   >
                     <Paperclip className="h-4 w-4" />
                     Upload PDF document
                   </button>
-                  <div className="border-t my-1" />
+                  <div className="my-1 border-t border-border/60" />
                   <button
                     type="button"
                     onClick={() => {
@@ -790,7 +797,7 @@ export function Agent() {
                       setSwarmPreset({ name: "auto", title: "Agent Swarm" });
                       inputRef.current?.focus();
                     }}
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
+                    className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
                   >
                     <Users className="h-4 w-4" />
                     Agent Swarm
@@ -822,14 +829,14 @@ export function Agent() {
                 }
               }}
               placeholder={t.prompt}
-              className="flex-1 px-4 py-2.5 rounded-xl border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 transition-shadow resize-none max-h-32 overflow-y-auto"
+              className="min-w-0 max-h-36 min-h-10 flex-1 resize-none overflow-y-auto rounded-xl border border-transparent bg-transparent px-3 py-2.5 text-sm transition-shadow placeholder:text-muted-foreground/70 focus:border-primary/30 focus:bg-background/30 focus:outline-none focus:ring-2 focus:ring-primary/25"
               disabled={status === "streaming"}
             />
             {messages.length > 0 && (
               <button
                 type="button"
                 onClick={handleExport}
-                className="px-3 py-2.5 rounded-xl border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-border/70 text-muted-foreground transition-colors hover:border-signal/40 hover:bg-signal/10 hover:text-signal"
                 title="Export chat"
               >
                 <Download className="h-4 w-4" />
@@ -839,7 +846,7 @@ export function Agent() {
               <button
                 type="button"
                 onClick={handleCancel}
-                className="px-4 py-2.5 rounded-xl bg-destructive text-destructive-foreground text-sm font-medium hover:opacity-90 transition-opacity"
+                className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-destructive text-destructive-foreground transition-opacity hover:opacity-90"
                 title="Stop generation"
               >
                 <Square className="h-4 w-4" />
@@ -848,7 +855,7 @@ export function Agent() {
               <button
                 type="submit"
                 disabled={!input.trim() && !attachment}
-                className="px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium disabled:opacity-40 hover:opacity-90 transition-opacity"
+                className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Send className="h-4 w-4" />
               </button>

@@ -15,6 +15,7 @@ interface Props {
 
 export const RunCompleteCard = memo(function RunCompleteCard({ msg }: Props) {
   const { t } = useI18n();
+  const [metrics, setMetrics] = useState(msg.metrics);
   const [curve, setCurve] = useState(msg.equityCurve);
   const [pineCode, setPineCode] = useState<string | null>(null);
   const [pineLoading, setPineLoading] = useState(false);
@@ -23,12 +24,21 @@ export const RunCompleteCard = memo(function RunCompleteCard({ msg }: Props) {
   const [pineExists, setPineExists] = useState(false);
 
   useEffect(() => {
-    if (!curve && msg.runId) {
+    if (msg.metrics) setMetrics(msg.metrics);
+  }, [msg.metrics]);
+
+  useEffect(() => {
+    if (msg.equityCurve) setCurve(msg.equityCurve);
+  }, [msg.equityCurve]);
+
+  useEffect(() => {
+    if ((!metrics || !curve) && msg.runId) {
       api.getRun(msg.runId).then(r => {
-        if (r.equity_curve) setCurve(r.equity_curve.map(e => ({ time: e.time, equity: e.equity })));
+        if (!metrics && r.metrics) setMetrics(r.metrics);
+        if (!curve && r.equity_curve) setCurve(r.equity_curve.map(e => ({ time: e.time, equity: e.equity })));
       }).catch(() => {});
     }
-  }, [msg.runId, curve]);
+  }, [msg.runId, metrics, curve]);
 
   // Check if Pine Script exists for this run (skip for shadow-only cards with no runId)
   useEffect(() => {
@@ -68,18 +78,18 @@ export const RunCompleteCard = memo(function RunCompleteCard({ msg }: Props) {
   return (
     <div className="flex gap-3">
       <AgentAvatar />
-      <div className="flex-1 min-w-0 space-y-2">
-        {msg.metrics && Object.keys(msg.metrics).length > 0 && (
-          <MetricsCard metrics={msg.metrics} compact />
+      <div className="glass-panel-soft min-w-0 flex-1 space-y-3 rounded-xl p-3">
+        {metrics && Object.keys(metrics).length > 0 && (
+          <MetricsCard metrics={metrics} compact />
         )}
         {curve && curve.length > 1 && (
           <MiniEquityChart data={curve} height={80} />
         )}
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex flex-wrap items-center gap-2">
           {msg.runId && (
             <Link
               to={`/runs/${msg.runId}`}
-              className="text-sm text-primary hover:underline inline-flex items-center gap-1.5 font-medium"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-primary/25 bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/15"
             >
               <BarChart3 className="h-3.5 w-3.5" />
               {t.fullReport}
@@ -89,7 +99,7 @@ export const RunCompleteCard = memo(function RunCompleteCard({ msg }: Props) {
             <button
               onClick={handlePineClick}
               disabled={pineLoading}
-              className="text-sm text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1.5 font-medium disabled:opacity-50"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-1.5 text-sm font-medium text-emerald-600 transition-colors hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50 dark:text-emerald-400"
             >
               {pineLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Code2 className="h-3.5 w-3.5" />}
               Pine Script
@@ -100,7 +110,7 @@ export const RunCompleteCard = memo(function RunCompleteCard({ msg }: Props) {
               href={`/shadow-reports/${encodeURIComponent(msg.shadowId)}?format=html`}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-sm text-teal-600 dark:text-teal-400 hover:underline inline-flex items-center gap-1.5 font-medium"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-signal/25 bg-signal/10 px-3 py-1.5 text-sm font-medium text-signal transition-colors hover:bg-signal/15"
             >
               <FileText className="h-3.5 w-3.5" />
               Shadow Report

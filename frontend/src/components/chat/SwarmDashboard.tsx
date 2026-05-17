@@ -93,9 +93,9 @@ export function SwarmDashboard(props: SwarmDashboardProps) {
   return (
     <div className="space-y-3 w-full">
       {/* Dashboard panel */}
-      <div className={`rounded-xl border ${borderColor} overflow-hidden`}>
+      <div className={`glass-panel overflow-hidden rounded-xl ${borderColor}`}>
         {/* Header */}
-        <div className={`px-4 py-2.5 ${headerBg} flex items-center justify-between`}>
+        <div className={`flex items-center justify-between px-4 py-2.5 ${headerBg}`}>
           <div className="flex items-center gap-2">
             <span className="font-semibold text-sm">{preset}</span>
             {finished ? (
@@ -107,7 +107,7 @@ export function SwarmDashboard(props: SwarmDashboardProps) {
                 {finalStatus.toUpperCase()}
               </span>
             ) : (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-primary/20 text-primary font-medium">
+              <span className="rounded-full border border-primary/25 bg-primary/20 px-2 py-0.5 text-xs font-medium text-primary">
                 RUNNING
               </span>
             )}
@@ -128,7 +128,7 @@ export function SwarmDashboard(props: SwarmDashboardProps) {
               : agent.elapsed / 1000;
 
             return (
-              <div key={agentId} className="px-4 py-2 flex items-center gap-3 text-sm">
+              <div key={agentId} className="flex items-center gap-3 px-4 py-2 text-sm transition-colors hover:bg-muted/20">
                 {/* Agent name */}
                 <div className={`w-40 shrink-0 font-mono text-xs truncate ${agentColor(idx)}`}>
                   {agent.id}
@@ -160,8 +160,8 @@ export function SwarmDashboard(props: SwarmDashboardProps) {
         </div>
 
         {/* Progress bar */}
-        <div className="px-4 py-2 border-t border-border/50 flex items-center gap-3">
-          <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+        <div className="flex items-center gap-3 border-t border-border/50 px-4 py-2">
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
             <div
               className={`h-full rounded-full transition-all duration-500 ${
                 finished
@@ -184,7 +184,7 @@ export function SwarmDashboard(props: SwarmDashboardProps) {
             const lines = summary.split("\n");
             const preview = lines.slice(0, 8).join("\n") + (lines.length > 8 ? "\n..." : "");
             return (
-              <div key={agentId + idx} className={`rounded-lg ${agentBg(colorIdx)} px-4 py-3`}>
+              <div key={agentId + idx} className={`rounded-lg border border-border/50 ${agentBg(colorIdx)} px-4 py-3`}>
                 <div className={`text-xs font-semibold mb-1.5 ${agentColor(colorIdx)}`}>
                   {agentId}
                 </div>
@@ -199,7 +199,7 @@ export function SwarmDashboard(props: SwarmDashboardProps) {
 
       {/* Final report */}
       {finalReport && (
-        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-5 py-4">
+        <div className="glass-panel-soft rounded-xl border-emerald-500/30 bg-emerald-500/5 px-5 py-4">
           <div className="text-xs font-semibold text-emerald-500 mb-3">Final Report</div>
           <div className="prose prose-sm dark:prose-invert max-w-none">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{finalReport}</ReactMarkdown>

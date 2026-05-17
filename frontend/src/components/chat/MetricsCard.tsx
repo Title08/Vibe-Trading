@@ -26,11 +26,11 @@ export const MetricsCard = memo(function MetricsCard({ metrics, compact = false 
 
   return (
     <div className={cn(
-      "grid gap-1.5 rounded-xl border border-border/60 bg-muted/20 p-3",
+      "glass-panel-soft grid gap-1.5 rounded-xl p-3",
       compact ? "grid-cols-3" : "grid-cols-[repeat(auto-fit,minmax(120px,1fr))]"
     )}>
       {shown.map(({ k, v }) => (
-        <div key={k} className="text-center py-1">
+        <div key={k} className="rounded-lg border border-border/40 bg-background/30 py-2 text-center">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium">
             {getMetricLabel(k, t as unknown as Record<string, string>)}
           </p>

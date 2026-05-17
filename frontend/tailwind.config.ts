@@ -17,6 +17,8 @@ export default {
         danger: "hsl(var(--danger))",
         warning: "hsl(var(--warning))",
         info: "hsl(var(--info))",
+        ai: "hsl(var(--accent-ai))",
+        signal: "hsl(var(--accent-cyan))",
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],

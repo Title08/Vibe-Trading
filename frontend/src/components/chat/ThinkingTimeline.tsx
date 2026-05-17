@@ -78,11 +78,11 @@ export const ThinkingTimeline = memo(function ThinkingTimeline({ messages, isLat
     : t.thinkingDone.replace("{count}", String(stepCount)) + (totalMs > 0 ? ` · ${(totalMs / 1000).toFixed(1)}s` : "");
 
   return (
-    <div className="rounded-lg border border-border/40 bg-muted/5 overflow-hidden">
+    <div className="glass-panel-soft overflow-hidden rounded-xl">
       {/* Summary bar */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-muted/10 transition-colors"
+        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-xs transition-colors hover:bg-muted/20"
       >
         {expanded
           ? <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
@@ -110,9 +110,9 @@ export const ThinkingTimeline = memo(function ThinkingTimeline({ messages, isLat
 
       {/* Expanded step list */}
       {expanded && steps.length > 0 && (
-        <div className="border-t border-border/30 px-3 py-1.5 space-y-0.5">
+        <div className="space-y-0.5 border-t border-border/50 px-3 py-1.5">
           {steps.map((step, i) => (
-            <div key={`${step.tool}-${i}`} className="flex items-center gap-2 py-1 text-xs">
+            <div key={`${step.tool}-${i}`} className="flex items-center gap-2 rounded-md px-1 py-1 text-xs hover:bg-muted/20">
               {/* Tree connector */}
               <span className="text-border/60 shrink-0 w-3 text-center">
                 {i < steps.length - 1 ? "├" : "└"}
@@ -148,7 +148,7 @@ export const ThinkingTimeline = memo(function ThinkingTimeline({ messages, isLat
 
       {/* Expanded: show thinking content if any (for Q&A without tools) */}
       {expanded && steps.length === 0 && latestThinking && (
-        <div className="border-t border-border/30 px-3 py-2">
+        <div className="border-t border-border/50 px-3 py-2">
           <p className="text-xs text-muted-foreground/50 leading-relaxed line-clamp-4">
             {latestThinking}
           </p>

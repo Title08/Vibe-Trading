@@ -1,4 +1,4 @@
-﻿import { Bot, TrendingUp, Bitcoin, Globe, Sparkles, Users, UserCircle2, NotebookPen } from "lucide-react";
+import { Activity, BarChart3, Bot, Globe, NotebookPen, ShieldCheck, Sparkles, TrendingUp, UserCircle2, Users, Zap } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 
 interface Example {
@@ -66,7 +66,7 @@ const CATEGORIES: Category[] = [
       },
       {
         title: "Quant Strategy Desk",
-        desc: "Screening → factor research → backtest → risk audit pipeline",
+        desc: "Screening to factor research to backtest to risk audit",
         prompt: "[Swarm Team Mode] Use the quant_strategy_desk preset to find and backtest the best momentum strategy on CSI 300 constituents",
       },
     ],
@@ -95,12 +95,12 @@ const CATEGORIES: Category[] = [
     examples: [
       {
         title: "Analyze My Broker Export",
-        desc: "Parse 同花顺/东财/富途/generic CSV — holding days, win rate, PnL ratio, hourly distribution",
-        prompt: "Analyze the trade journal I just uploaded — full profile with holding stats, win rate, top symbols, and hourly distribution",
+        desc: "Parse journal CSV with holding stats and PnL behavior",
+        prompt: "Analyze the trade journal I just uploaded - full profile with holding stats, win rate, top symbols, and hourly distribution",
       },
       {
         title: "Diagnose My Behavior Biases",
-        desc: "Disposition effect, overtrading, chasing momentum, anchoring — severity + numeric evidence",
+        desc: "Disposition, overtrading, chasing, anchoring",
         prompt: "Run the 4 behavior diagnostics on my trade journal (disposition, overtrading, chasing, anchoring) and tell me which bias hurts my PnL most",
       },
     ],
@@ -112,18 +112,18 @@ const CATEGORIES: Category[] = [
     examples: [
       {
         title: "Train My Shadow from Journal",
-        desc: "Extract your strategy rules from a broker CSV and persist a Shadow profile",
-        prompt: "Train my shadow account from the trading journal I just uploaded — show the extracted rules and confirm they look like my behavior",
+        desc: "Extract your strategy rules from a broker CSV",
+        prompt: "Train my shadow account from the trading journal I just uploaded - show the extracted rules and confirm they look like my behavior",
       },
       {
         title: "How Much Am I Leaving on the Table?",
-        desc: "Backtest your shadow strategy and attribute delta vs. your actual PnL",
+        desc: "Backtest your shadow strategy and attribute the delta",
         prompt: "Run a shadow backtest for the last 90 days on the US market and break down where my PnL diverged from the shadow (rule violations, early exits, missed signals)",
       },
       {
         title: "Generate Shadow Report",
-        desc: "8-section HTML/PDF — equity curve, per-market Sharpe, attribution waterfall",
-        prompt: "Render the shadow report and give me the URL — lead with the you-vs-shadow delta",
+        desc: "Equity curve, per-market Sharpe, attribution waterfall",
+        prompt: "Render the shadow report and give me the URL - lead with the you-vs-shadow delta",
       },
     ],
   },
@@ -133,17 +133,11 @@ const CAPABILITY_CHIPS = [
   "70 Finance Skills",
   "29 Swarm Presets",
   "32 Agent Tools",
-  "3 Markets: A-Share · Crypto · HK/US",
+  "A-Share / Crypto / HK-US",
   "Minute to Daily Timeframes",
   "4 Portfolio Optimizers",
-  "15+ Risk Metrics",
   "Options & Derivatives",
-  "PDF & Web Research",
   "Factor Analysis & ML",
-  "Trade Journal Analyzer",
-  "Shadow Account Backtest",
-  "Persistent Memory",
-  "Session Search",
 ];
 
 interface Props {
@@ -154,42 +148,70 @@ export function WelcomeScreen({ onExample }: Props) {
   const { t } = useI18n();
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 text-center">
-      {/* Header */}
-      <div className="space-y-3">
-        <div className="h-16 w-16 mx-auto rounded-2xl bg-gradient-to-br from-primary/80 to-info/80 flex items-center justify-center shadow-lg">
-          <Bot className="h-8 w-8 text-white" />
-        </div>
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">Vibe-Trading</h2>
-          <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto leading-relaxed">
-            vibe trading with your professional financial agent team
-          </p>
-          <p className="text-sm text-muted-foreground mt-2 max-w-md leading-relaxed mx-auto">
-            {t.describeStrategy}
-          </p>
-        </div>
-      </div>
+    <div className="mx-auto flex min-h-[64vh] w-full min-w-0 max-w-5xl flex-col gap-6 py-6">
+      <section className="glass-panel min-w-0 max-w-full overflow-hidden rounded-xl">
+        <div className="market-grid grid min-w-0 gap-6 p-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)] lg:p-7">
+          <div className="min-w-0 space-y-5 text-left">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-primary/30 bg-primary/15 text-primary shadow-[0_0_44px_-18px_hsl(var(--primary))]">
+                <Bot className="h-6 w-6" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="break-words text-xl font-semibold tracking-tight sm:text-2xl">Vibe-Trading Agent Desk</h2>
+                <p className="text-sm text-muted-foreground">{t.describeStrategy}</p>
+              </div>
+            </div>
 
-      {/* Capability chips */}
-      <div className="flex flex-wrap justify-center gap-2 max-w-lg">
-        {CAPABILITY_CHIPS.map((chip) => (
-          <span
-            key={chip}
-            className="px-2.5 py-1 text-xs rounded-full border border-border/60 text-muted-foreground bg-muted/30"
-          >
-            {chip}
-          </span>
-        ))}
-      </div>
+            <div className="grid min-w-0 gap-3 sm:grid-cols-3">
+              <div className="min-w-0 rounded-lg border border-signal/25 bg-signal/10 p-3">
+                <Activity className="mb-2 h-4 w-4 text-signal" />
+                <div className="text-lg font-semibold tabular-nums">3</div>
+                <div className="text-xs text-muted-foreground">market data lanes</div>
+              </div>
+              <div className="min-w-0 rounded-lg border border-ai/25 bg-ai/10 p-3">
+                <Users className="mb-2 h-4 w-4 text-ai" />
+                <div className="text-lg font-semibold tabular-nums">29</div>
+                <div className="text-xs text-muted-foreground">swarm presets</div>
+              </div>
+              <div className="min-w-0 rounded-lg border border-primary/25 bg-primary/10 p-3">
+                <ShieldCheck className="mb-2 h-4 w-4 text-primary" />
+                <div className="text-lg font-semibold tabular-nums">15+</div>
+                <div className="text-xs text-muted-foreground">risk metrics</div>
+              </div>
+            </div>
+          </div>
 
-      {/* Example categories grid */}
-      <div className="w-full max-w-2xl text-left space-y-4">
-        <p className="text-xs text-muted-foreground px-1">{t.examples}</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="min-w-0 overflow-hidden rounded-xl border border-border/60 bg-background/50 p-4 shadow-inner">
+            <div className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+              <Zap className="h-3.5 w-3.5 text-primary" />
+              Mission presets
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {CAPABILITY_CHIPS.map((chip) => (
+                <span
+                  key={chip}
+                  className="min-w-0 rounded-full border border-border/70 bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground"
+                >
+                  {chip}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="w-full space-y-4 text-left">
+        <div className="flex items-center justify-between gap-3 px-1">
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{t.examples}</p>
+          <div className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+            <BarChart3 className="h-3.5 w-3.5 text-signal" />
+            Backtest, research, compare, report
+          </div>
+        </div>
+        <div className="grid min-w-0 grid-cols-1 gap-3 lg:grid-cols-3">
           {CATEGORIES.map((cat) => (
-            <div key={cat.label} className="space-y-2">
-              <div className={`flex items-center gap-1.5 text-xs font-medium px-1 ${cat.color.split(" ").filter(c => c.startsWith("text-")).join(" ")}`}>
+            <div key={cat.label} className="glass-panel-soft min-w-0 space-y-2 rounded-xl p-3">
+              <div className={`flex items-center gap-1.5 px-1 text-xs font-semibold ${cat.color.split(" ").filter(c => c.startsWith("text-")).join(" ")}`}>
                 {cat.icon}
                 <span>{cat.label}</span>
               </div>
@@ -198,12 +220,12 @@ export function WelcomeScreen({ onExample }: Props) {
                   <button
                     key={ex.title}
                     onClick={() => onExample(ex.prompt)}
-                    className={`block w-full text-left px-3 py-2.5 rounded-xl border transition-colors ${cat.color}`}
+                    className={`block w-full min-w-0 cursor-pointer rounded-lg border bg-background/30 px-3 py-2.5 text-left transition-colors ${cat.color}`}
                   >
-                    <span className="text-sm font-medium text-foreground leading-snug">
+                    <span className="text-sm font-medium leading-snug text-foreground">
                       {ex.title}
                     </span>
-                    <span className="block text-xs text-muted-foreground mt-0.5 leading-snug">
+                    <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
                       {ex.desc}
                     </span>
                   </button>
@@ -216,5 +238,3 @@ export function WelcomeScreen({ onExample }: Props) {
     </div>
   );
 }
-
-

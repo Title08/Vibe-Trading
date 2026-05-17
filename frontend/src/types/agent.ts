@@ -14,6 +14,8 @@ export interface AgentMessage {
   timestamp: number;
   runId?: string;
   metrics?: Record<string, number>;
+  provider?: string;
+  model?: string;
   equityCurve?: Array<{ time: string; equity: number | string }>;
   /** Phase label for thinking entries */
   stage?: string;
