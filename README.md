@@ -143,6 +143,16 @@ Vibe-Trading is an open-source research workspace for turning finance questions 
 
 It is designed for research, simulation, and backtesting. It does not execute live trades.
 
+### 🚀 Getting Started
+
+To start the backend server, you can use the scripts provided in the root folder:
+
+- **Windows (PowerShell):** `./start-backend.ps1`
+- **Windows (Batch):** `start-backend.bat`
+- **Unix/Linux/macOS:** `./start-backend.sh`
+
+These scripts will automatically detect your virtual environment and start the API server on port 8899.
+
 ---
 
 ## ✨ What You Can Do
