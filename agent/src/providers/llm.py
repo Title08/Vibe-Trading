@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
-import asyncio
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 try:
@@ -22,6 +22,7 @@ except ImportError:
 
 
 if ChatOpenAI is not None:
+
     class ChatOpenAIWithReasoning(ChatOpenAI):  # type: ignore[misc,valid-type]
         """ChatOpenAI that preserves provider reasoning across invoke + stream.
 
@@ -53,9 +54,7 @@ if ChatOpenAI is not None:
             default_chunk_class: type,
             base_generation_info: Optional[dict],
         ):
-            gen = super()._convert_chunk_to_generation_chunk(
-                chunk, default_chunk_class, base_generation_info
-            )
+            gen = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
             if gen is None:
                 return None
             choices = chunk.get("choices") or chunk.get("chunk", {}).get("choices")
@@ -93,7 +92,7 @@ AGENT_DIR = Path(__file__).resolve().parents[2]
 logger = logging.getLogger(__name__)
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
-DEFAULT_FALLBACK_CHAIN = ("openrouter", "groq", "openai-codex")
+DEFAULT_FALLBACK_CHAIN = ("openrouter", "openai-codex")
 DEFAULT_FALLBACK_MODELS = {
     "openrouter": "deepseek/deepseek-v3.2",
     "groq": "llama-3.3-70b-versatile",
@@ -282,7 +281,9 @@ def _is_retryable_llm_error(exc: Exception) -> bool:
     text = str(exc).lower()
     if any(marker in text for marker in NON_RETRYABLE_ERROR_MARKERS):
         return False
-    if any(f"http {code}" in text or f"status {code}" in text or f" {code} " in text for code in RETRYABLE_STATUS_CODES):
+    if any(
+        f"http {code}" in text or f"status {code}" in text or f" {code} " in text for code in RETRYABLE_STATUS_CODES
+    ):
         return True
     return any(marker in text for marker in RETRYABLE_ERROR_MARKERS)
 
@@ -448,9 +449,9 @@ def build_llm(*, model_name: Optional[str] = None, callbacks: Any = None) -> Any
     if not name:
         raise RuntimeError("LANGCHAIN_MODEL_NAME is not set")
     provider = os.getenv("LANGCHAIN_PROVIDER", "openai").strip().replace("_", "-").lower()
-    candidates = _fallback_chain(provider, name) if _env_flag("LLM_FALLBACK_ENABLED", True) else [
-        LLMCandidate(provider, name)
-    ]
+    candidates = (
+        _fallback_chain(provider, name) if _env_flag("LLM_FALLBACK_ENABLED", True) else [LLMCandidate(provider, name)]
+    )
     return FallbackChatLLM(candidates, callbacks=callbacks)
 
 
