@@ -9,7 +9,7 @@
 <h1 align="center">Vibe-Trading: Your Personal Trading Agent</h1>
 
 <p align="center">
-  <b>One Command to Empower Your Agent with Comprehensive Trading Capabilities</b>
+  <b>This is a personal fork of <a href="https://github.com/HKUDS/Vibe-Trading">HKUDS/Vibe-Trading</a>.</b>
 </p>
 
 <p align="center">
