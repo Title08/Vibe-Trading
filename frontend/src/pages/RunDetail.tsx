@@ -30,6 +30,23 @@ import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 const rehypePlugins = [rehypeHighlight];
 
 type Tab = "chart" | "trades" | "runCard" | "code" | "validation";
+type TradeSideFilter = "all" | "buy" | "sell";
+type TradeStatusFilter = "all" | "win" | "loss" | "flat" | "entry";
+type TradeStatus = Exclude<TradeStatusFilter, "all">;
+
+interface NormalizedTrade {
+  raw: Record<string, string>;
+  time: string;
+  code: string;
+  side: "buy" | "sell" | string;
+  price: string;
+  qty: string;
+  reason: string;
+  pnl: number | null;
+  returnPct: number | null;
+  holdingDays: number | null;
+  status: TradeStatus;
+}
 
 function downloadCsv(filename: string, csvContent: string) {
   const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
@@ -61,6 +78,55 @@ function buildMetricsCsv(metrics: BacktestMetrics): string {
   const header = "metric,value";
   const rows = Object.entries(metrics).map(([k, v]) => `${escapeCsvField(k)},${escapeCsvField(v)}`);
   return [header, ...rows].join("\n");
+}
+
+function parseTradeNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const n = Number(String(value).replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeTrade(trade: Record<string, string>): NormalizedTrade {
+  const side = String(trade.side || "").toLowerCase();
+  const pnl = parseTradeNumber(trade.pnl);
+  const returnPct = parseTradeNumber(trade.return_pct);
+  const holdingDays = parseTradeNumber(trade.holding_days);
+  const isEntry = side === "buy" || pnl === null || (pnl === 0 && (holdingDays ?? 0) === 0);
+  const status: TradeStatus = isEntry ? "entry" : pnl > 0 ? "win" : pnl < 0 ? "loss" : "flat";
+  return {
+    raw: trade,
+    time: trade.time || trade.timestamp || "",
+    code: trade.code || "",
+    side,
+    price: trade.price || "",
+    qty: trade.qty || "",
+    reason: trade.reason || "",
+    pnl,
+    returnPct,
+    holdingDays,
+    status,
+  };
+}
+
+function formatTradeCurrency(value: number | null): string {
+  if (value === null) return "-";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+function formatTradePercent(value: number | null): string {
+  if (value === null) return "-";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
+
+function formatTradeNumber(value: number | null): string {
+  if (value === null) return "-";
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function formatTradeStatus(status: TradeStatus): string {
+  return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
 export function RunDetail() {
@@ -345,34 +411,154 @@ function ChartTab({ run }: { run: RunData }) {
 }
 
 function TradesTab({ run }: { run: RunData }) {
-  const trades = run.trade_log || [];
+  const [sideFilter, setSideFilter] = useState<TradeSideFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<TradeStatusFilter>("all");
+  const trades = (run.trade_log || []).map(normalizeTrade);
   if (trades.length === 0) return <div className="p-8 text-muted-foreground text-sm">No trades recorded.</div>;
+  const filteredTrades = trades.filter((trade) => {
+    const sideMatches = sideFilter === "all" || trade.side === sideFilter;
+    const statusMatches = statusFilter === "all" || trade.status === statusFilter;
+    return sideMatches && statusMatches;
+  });
+  const buyCount = trades.filter((trade) => trade.side === "buy").length;
+  const sellCount = trades.filter((trade) => trade.side === "sell").length;
+  const winCount = trades.filter((trade) => trade.status === "win").length;
+  const lossCount = trades.filter((trade) => trade.status === "loss").length;
+  const closingCount = trades.filter((trade) => trade.status === "win" || trade.status === "loss" || trade.status === "flat").length;
+  const winRate = closingCount > 0 ? winCount / closingCount : 0;
+  const sideOptions: Array<{ value: TradeSideFilter; label: string }> = [
+    { value: "all", label: "All" },
+    { value: "buy", label: "Buy" },
+    { value: "sell", label: "Sell" },
+  ];
+  const statusOptions: Array<{ value: TradeStatusFilter; label: string }> = [
+    { value: "all", label: "All" },
+    { value: "win", label: "Win" },
+    { value: "loss", label: "Loss" },
+    { value: "flat", label: "Flat" },
+    { value: "entry", label: "Entry" },
+  ];
   return (
-    <div className="p-4">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b text-left text-muted-foreground">
-            <th className="py-2 pr-4">Time</th>
-            <th className="py-2 pr-4">Code</th>
-            <th className="py-2 pr-4">Side</th>
-            <th className="py-2 pr-4">Price</th>
-            <th className="py-2 pr-4">Qty</th>
-            <th className="py-2">Reason</th>
-          </tr>
-        </thead>
-        <tbody>
-          {trades.map((tr, i) => (
-            <tr key={i} className="border-b last:border-0 hover:bg-muted/20">
-              <td className="py-2 pr-4 font-mono text-xs">{tr.time || tr.timestamp}</td>
-              <td className="py-2 pr-4">{tr.code}</td>
-              <td className={cn("py-2 pr-4 font-medium", tr.side === "BUY" ? "text-success" : "text-danger")}>{tr.side}</td>
-              <td className="py-2 pr-4 tabular-nums">{tr.price}</td>
-              <td className="py-2 pr-4 tabular-nums">{tr.qty}</td>
-              <td className="py-2 text-muted-foreground">{tr.reason}</td>
+    <div className="space-y-4 p-4">
+      <div className="grid gap-2 md:grid-cols-6">
+        <TradeSummaryStat label="Buys" value={String(buyCount)} />
+        <TradeSummaryStat label="Sells" value={String(sellCount)} />
+        <TradeSummaryStat label="Wins" value={String(winCount)} tone="positive" />
+        <TradeSummaryStat label="Losses" value={String(lossCount)} tone="negative" />
+        <TradeSummaryStat label="Win Rate" value={`${(winRate * 100).toFixed(2)}%`} tone={winRate >= 0.5 ? "positive" : "neutral"} />
+        <TradeSummaryStat label="Showing" value={`${filteredTrades.length}/${trades.length}`} />
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium uppercase text-muted-foreground">Side</span>
+          <SegmentedFilter options={sideOptions} value={sideFilter} onChange={setSideFilter} />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium uppercase text-muted-foreground">Status</span>
+          <SegmentedFilter options={statusOptions} value={statusFilter} onChange={setStatusFilter} />
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[980px] text-sm">
+          <thead>
+            <tr className="border-b text-left text-muted-foreground">
+              <th className="py-2 pr-4">Time</th>
+              <th className="py-2 pr-4">Code</th>
+              <th className="py-2 pr-4">Side</th>
+              <th className="py-2 pr-4">Status</th>
+              <th className="py-2 pr-4 text-right">Price</th>
+              <th className="py-2 pr-4 text-right">Qty</th>
+              <th className="py-2 pr-4 text-right">PnL</th>
+              <th className="py-2 pr-4 text-right">Return %</th>
+              <th className="py-2 pr-4 text-right">Hold Days</th>
+              <th className="py-2">Reason</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {filteredTrades.length > 0 ? filteredTrades.map((tr, i) => (
+              <tr key={`${tr.time}-${tr.side}-${i}`} className="border-b last:border-0 hover:bg-muted/20">
+                <td className="py-2 pr-4 font-mono text-xs">{tr.time}</td>
+                <td className="py-2 pr-4">{tr.code}</td>
+                <td className={cn("py-2 pr-4 font-medium", tr.side === "buy" ? "text-success" : "text-danger")}>
+                  {tr.side.toUpperCase()}
+                </td>
+                <td className="py-2 pr-4">
+                  <span className={cn(
+                    "inline-flex min-w-16 justify-center rounded-md border px-2 py-0.5 text-xs font-medium",
+                    tr.status === "win" && "border-success/25 bg-success/10 text-success",
+                    tr.status === "loss" && "border-danger/25 bg-danger/10 text-danger",
+                    tr.status === "flat" && "border-muted-foreground/20 bg-muted/30 text-muted-foreground",
+                    tr.status === "entry" && "border-primary/20 bg-primary/10 text-primary",
+                  )}>
+                    {formatTradeStatus(tr.status)}
+                  </span>
+                </td>
+                <td className="py-2 pr-4 text-right tabular-nums">{tr.price}</td>
+                <td className="py-2 pr-4 text-right tabular-nums">{tr.qty}</td>
+                <td className={cn(
+                  "py-2 pr-4 text-right tabular-nums",
+                  tr.pnl !== null && tr.pnl > 0 && "text-success",
+                  tr.pnl !== null && tr.pnl < 0 && "text-danger",
+                  (tr.pnl === null || tr.pnl === 0) && "text-muted-foreground",
+                )}>
+                  {formatTradeCurrency(tr.pnl)}
+                </td>
+                <td className={cn(
+                  "py-2 pr-4 text-right tabular-nums",
+                  tr.returnPct !== null && tr.returnPct > 0 && "text-success",
+                  tr.returnPct !== null && tr.returnPct < 0 && "text-danger",
+                  (tr.returnPct === null || tr.returnPct === 0) && "text-muted-foreground",
+                )}>
+                  {formatTradePercent(tr.returnPct)}
+                </td>
+                <td className="py-2 pr-4 text-right tabular-nums text-muted-foreground">{formatTradeNumber(tr.holdingDays)}</td>
+                <td className="py-2 text-muted-foreground">{tr.reason}</td>
+              </tr>
+            )) : (
+              <tr>
+                <td colSpan={10} className="py-8 text-center text-sm text-muted-foreground">No trades match the selected filters.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function TradeSummaryStat({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "positive" | "negative" | "neutral" }) {
+  return (
+    <div className="rounded-md border bg-card/60 px-3 py-2">
+      <div className="text-[10px] font-medium uppercase text-muted-foreground">{label}</div>
+      <div className={cn(
+        "mt-0.5 font-mono text-sm font-bold tabular-nums",
+        tone === "positive" && "text-success",
+        tone === "negative" && "text-danger",
+      )}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function SegmentedFilter<T extends string>({ options, value, onChange }: { options: Array<{ value: T; label: string }>; value: T; onChange: (value: T) => void }) {
+  return (
+    <div className="inline-flex rounded-lg border border-border/70 bg-background/40 p-0.5">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          className={cn(
+            "h-8 min-w-14 cursor-pointer rounded-md px-2.5 text-xs font-medium transition-colors",
+            value === option.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   );
 }
