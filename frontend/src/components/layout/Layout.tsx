@@ -8,6 +8,7 @@ import {
   Plus,
   Trash2,
   Pencil,
+  MoreVertical,
   MessageSquare,
   ChevronsLeft,
   ChevronsRight,
@@ -88,6 +89,23 @@ export function Layout() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [openSessionMenu, setOpenSessionMenu] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!openSessionMenu) return;
+
+    const closeMenu = () => setOpenSessionMenu(null);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+
+    document.addEventListener("mousedown", closeMenu);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", closeMenu);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [openSessionMenu]);
 
   const deleteSession = async (sid: string) => {
     try {
@@ -233,7 +251,10 @@ export function Layout() {
                         onChange={(e) => setRenameValue(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") renameSession(s.session_id);
-                          if (e.key === "Escape") setRenameTarget(null);
+                          if (e.key === "Escape") {
+                            setRenameTarget(null);
+                            setOpenSessionMenu(null);
+                          }
                         }}
                         onBlur={() => renameSession(s.session_id)}
                         className="min-w-0 flex-1 rounded-lg border border-primary bg-background px-3 py-1.5 text-xs outline-none"
@@ -242,7 +263,7 @@ export function Layout() {
                       <Link
                         to={`/agent?session=${s.session_id}`}
                         className={cn(
-                          "block min-w-0 flex-1 rounded-lg border px-3 py-2 pr-14 text-xs transition-colors truncate cursor-pointer",
+                          "block min-w-0 flex-1 rounded-lg border px-3 py-2 pr-8 text-xs transition-colors truncate cursor-pointer",
                           isActive
                             ? "border-primary/30 bg-primary/10 text-primary font-medium"
                             : "border-transparent text-muted-foreground hover:border-border/60 hover:bg-muted/40 hover:text-foreground",
@@ -273,37 +294,85 @@ export function Layout() {
                           {t.confirmDelete}
                         </button>
                         <button
-                          onClick={() => setDeleteTarget(null)}
+                          onClick={() => {
+                            setDeleteTarget(null);
+                            setOpenSessionMenu(null);
+                          }}
                           className="rounded p-1 text-[10px] text-muted-foreground hover:bg-muted cursor-pointer"
                         >
                           {t.cancelDelete}
                         </button>
                       </div>
                     ) : !isRenaming ? (
-                      <div className="absolute right-1 opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
+                      <div
+                        className="absolute right-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }}
+                      >
                         <button
+                          type="button"
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            setRenameTarget(s.session_id);
-                            setRenameValue(s.title || "");
+                            setOpenSessionMenu((current) =>
+                              current === s.session_id ? null : s.session_id,
+                            );
                           }}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer"
-                          title="Rename"
+                          className={cn(
+                            "rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer",
+                            openSessionMenu === s.session_id && "bg-muted text-foreground",
+                          )}
+                          title="Session actions"
+                          aria-label="Session actions"
+                          aria-haspopup="menu"
+                          aria-expanded={openSessionMenu === s.session_id}
                         >
-                          <Pencil className="h-3 w-3" />
+                          <MoreVertical className="h-3 w-3" />
                         </button>
-                        <button
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setDeleteTarget(s.session_id);
-                          }}
-                          className="rounded p-1 text-muted-foreground hover:bg-danger/10 hover:text-danger cursor-pointer"
-                          title={t.deleteConfirm}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
+                        {openSessionMenu === s.session_id && (
+                          <div
+                            className="absolute right-0 top-full z-50 mt-1 min-w-32 overflow-hidden rounded-lg border border-border/70 bg-card/95 py-1 shadow-lg backdrop-blur"
+                            role="menu"
+                          >
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setOpenSessionMenu(null);
+                                setDeleteTarget(null);
+                                setRenameTarget(s.session_id);
+                                setRenameValue(s.title || "");
+                              }}
+                              className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                              role="menuitem"
+                            >
+                              <Pencil className="h-3 w-3" />
+                              {t.rename}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setOpenSessionMenu(null);
+                                setRenameTarget(null);
+                                setDeleteTarget(s.session_id);
+                              }}
+                              className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-xs text-danger hover:bg-danger/10"
+                              role="menuitem"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              {t.deleteConfirm}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ) : null}
                   </div>
