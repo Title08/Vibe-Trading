@@ -107,6 +107,12 @@ export function Layout() {
     };
   }, [openSessionMenu]);
 
+  useEffect(() => {
+    if (collapsed) {
+      setOpenSessionMenu(null);
+    }
+  }, [collapsed]);
+
   const deleteSession = async (sid: string) => {
     try {
       await api.deleteSession(sid);
@@ -307,7 +313,6 @@ export function Layout() {
                       <div
                         className="absolute right-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100"
                         onMouseDown={(e) => {
-                          e.preventDefault();
                           e.stopPropagation();
                         }}
                         onClick={(e) => {
@@ -336,10 +341,7 @@ export function Layout() {
                           <MoreVertical className="h-3 w-3" />
                         </button>
                         {openSessionMenu === s.session_id && (
-                          <div
-                            className="absolute right-0 top-full z-50 mt-1 min-w-32 overflow-hidden rounded-lg border border-border/70 bg-card/95 py-1 shadow-lg backdrop-blur"
-                            role="menu"
-                          >
+                          <div className="absolute right-0 top-full z-50 mt-1 min-w-32 overflow-hidden rounded-lg border border-border/70 bg-card/95 py-1 shadow-lg backdrop-blur">
                             <button
                               type="button"
                               onClick={(e) => {
@@ -351,7 +353,6 @@ export function Layout() {
                                 setRenameValue(s.title || "");
                               }}
                               className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                              role="menuitem"
                             >
                               <Pencil className="h-3 w-3" />
                               {t.rename}
@@ -366,7 +367,6 @@ export function Layout() {
                                 setDeleteTarget(s.session_id);
                               }}
                               className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-xs text-danger hover:bg-danger/10"
-                              role="menuitem"
                             >
                               <Trash2 className="h-3 w-3" />
                               {t.deleteConfirm}
