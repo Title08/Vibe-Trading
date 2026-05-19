@@ -453,6 +453,9 @@ def _metric_value_style(key: str, value: str) -> str:
     return "white"
 
 
+_SPINNER_GLYPHS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
 class _RunDashboard:
     """Render a compact live view for a single agent run."""
 
@@ -467,11 +470,36 @@ class _RunDashboard:
         self.timeline: list[tuple[str, str, str, float, str]] = []
         self.status = "running"
         self.live: Optional[Live] = None
+        # Per-tool live feedback keyed by tool name. Supports parallel
+        # readonly batches (loop._execute_parallel runs up to 8 tools in
+        # ThreadPoolExecutor and each gets its own HeartbeatTimer). Each
+        # entry: {start_ts, elapsed_s, stage, current, total, message,
+        # prev_stage, stage_started_at}.
+        self.tool_active: dict[str, dict[str, Any]] = {}
+        self._spinner_idx = 0
+        self._last_progress_render: float = 0.0
 
     def refresh(self) -> None:
         """Refresh the live display when attached to a Rich Live context."""
         if self.live is not None:
             self.live.update(self.render())
+
+    def _ensure_entry(self, tool: str) -> dict[str, Any]:
+        """Return the active per-tool entry, creating it on first use."""
+        entry = self.tool_active.get(tool)
+        if entry is None:
+            entry = {
+                "start_ts": time.monotonic(),
+                "elapsed_s": 0.0,
+                "stage": "",
+                "current": None,
+                "total": None,
+                "message": "",
+                "prev_stage": None,
+                "stage_started_at": time.monotonic(),
+            }
+            self.tool_active[tool] = entry
+        return entry
 
     def handle_event(self, event_type: str, data: Dict[str, Any]) -> None:
         """Update the dashboard from AgentLoop UI events."""
@@ -494,9 +522,66 @@ class _RunDashboard:
             self.iterations += 1
             self.current_tool = tool or "tool"
             self.current_args = _strip_rich_tags(_format_tool_call_args(tool, args)).strip()
+            # If the prior timeline row is still "running" with no active
+            # entry in self.tool_active (i.e. its HeartbeatTimer is gone but
+            # no tool_result arrived), downgrade it to a warning (H2). Skip
+            # this when a parallel batch is still in flight — sibling tools
+            # legitimately remain "running" while a new call lands.
+            if self.timeline and self.timeline[-1][0] == "running":
+                prev_status, prev_tool, prev_args, _prev_el, _prev_pre = self.timeline[-1]
+                if prev_tool not in self.tool_active:
+                    self.timeline[-1] = (
+                        "warning",
+                        prev_tool,
+                        prev_args,
+                        0.0,
+                        "no result event",
+                    )
+            # Reset per-tool state on each call (handles repeat invocations).
+            now = time.monotonic()
+            self.tool_active[self.current_tool] = {
+                "start_ts": now,
+                "elapsed_s": 0.0,
+                "stage": "",
+                "current": None,
+                "total": None,
+                "message": "",
+                "prev_stage": None,
+                "stage_started_at": now,
+            }
             self.timeline.append(("running", self.current_tool, self.current_args, 0.0, ""))
             self.timeline = self.timeline[-8:]
             self.refresh()
+            return
+
+        if event_type == "tool_heartbeat":
+            # Keepalive while a long tool runs. Updates elapsed in-place.
+            tool = data.get("tool") or self.current_tool
+            entry = self._ensure_entry(tool)
+            entry["elapsed_s"] = float(data.get("elapsed_s", 0) or 0)
+            self.refresh()
+            return
+
+        if event_type == "tool_progress":
+            # Structured stage/current/total emitted from the tool.
+            tool = data.get("tool") or self.current_tool
+            entry = self._ensure_entry(tool)
+            stage = str(data.get("stage", "") or "")
+            if stage and stage != entry.get("stage"):
+                entry["prev_stage"] = entry.get("stage") or None
+                entry["stage_started_at"] = time.monotonic()
+            entry["stage"] = stage
+            entry["current"] = data.get("current")
+            entry["total"] = data.get("total")
+            entry["message"] = str(data.get("message", "") or "")
+            elapsed = data.get("elapsed_s")
+            if elapsed is not None:
+                entry["elapsed_s"] = float(elapsed)
+            # Throttle redraws so a chatty tool can't peg the renderer (M1).
+            now = time.monotonic()
+            if now - self._last_progress_render >= 0.25:
+                self._last_progress_render = now
+                self.refresh()
             return
 
         if event_type == "tool_result":
@@ -505,13 +590,23 @@ class _RunDashboard:
             elapsed_s = float(data.get("elapsed_ms", 0) or 0) / 1000
             preview = _strip_rich_tags(_format_tool_result_preview(tool, status, data.get("preview", "")))
             row_status = "success" if status == "ok" else "failed"
-            if self.timeline and self.timeline[-1][0] == "running":
-                self.timeline[-1] = (row_status, tool, self.timeline[-1][2], elapsed_s, preview)
-            else:
+            # Find the matching running row for this tool (may not be the last
+            # row when tools run in parallel).
+            matched = False
+            for idx in range(len(self.timeline) - 1, -1, -1):
+                row = self.timeline[idx]
+                if row[0] == "running" and row[1] == tool:
+                    self.timeline[idx] = (row_status, tool, row[2], elapsed_s, preview)
+                    matched = True
+                    break
+            if not matched:
                 self.timeline.append((row_status, tool, "", elapsed_s, preview))
             self.timeline = self.timeline[-8:]
-            self.current_tool = "thinking"
-            self.current_args = ""
+            # Drop the per-tool entry so it disappears from the active list.
+            self.tool_active.pop(tool, None)
+            if not self.tool_active:
+                self.current_tool = "thinking"
+                self.current_args = ""
             self.refresh()
             return
 
@@ -520,6 +615,82 @@ class _RunDashboard:
             self.timeline.append(("warning", "context", "", 0.0, f"compressed after {tokens} tokens"))
             self.timeline = self.timeline[-8:]
             self.refresh()
+
+    def _render_progress_row(
+        self,
+        tool: str,
+        entry: Dict[str, Any],
+        spinner: str,
+        bar_width: int,
+        compact: bool,
+        detail_width: int,
+    ) -> str:
+        """Render a single active-tool progress row for the Current grid."""
+        stage = str(entry.get("stage") or "")
+        current_val = entry.get("current")
+        total_val = entry.get("total")
+        message = str(entry.get("message") or "")
+        elapsed_s = float(entry.get("elapsed_s") or 0.0)
+        has_count = (
+            isinstance(current_val, int)
+            and isinstance(total_val, int)
+            and total_val > 0
+        )
+        has_structured = bool(stage or has_count or message)
+        if not has_structured and elapsed_s <= 0:
+            return ""
+        if not has_structured:
+            # Heartbeat-only fallback. No bar, no decimal precision (L4).
+            plain = f"{spinner} {tool} · still running… {elapsed_s:.0f}s elapsed"
+            return f"[dim]{_clip_inline(plain, detail_width)}[/dim]"
+        # Build a plain prefix + dim suffix so markup survives clipping.
+        prefix_plain_parts: list[str] = [spinner]
+        prefix_styled_parts: list[str] = [f"[cyan]{spinner}[/cyan]"]
+        if stage:
+            prefix_plain_parts.append(stage)
+            prefix_styled_parts.append(f"[bold cyan]{stage}[/bold cyan]")
+        if has_count:
+            filled = max(0, min(bar_width, int(bar_width * current_val / total_val)))
+            bar = "#" * filled + "-" * (bar_width - filled)
+            prefix_plain_parts.append(f"[{bar}]")
+            prefix_styled_parts.append(f"[cyan]\\[{bar}][/cyan]")
+            count_str = f"{current_val}/{total_val}"
+            prefix_plain_parts.append(count_str)
+            prefix_styled_parts.append(f"[cyan]{count_str}[/cyan]")
+        else:
+            prefix_plain_parts.append(f"{elapsed_s:.1f}s")
+            prefix_styled_parts.append(f"[cyan]{elapsed_s:.1f}s[/cyan]")
+        prefix_plain = " ".join(prefix_plain_parts)
+        prefix_styled = " ".join(prefix_styled_parts)
+        suffix_plain_parts: list[str] = []
+        if message:
+            suffix_plain_parts.append(f"· {message}")
+        # ETA: only when count is known, we're past ~10% and at least 3 units,
+        # and the stage hasn't just changed (L1). Suppressed in compact mode.
+        if has_count and not compact and current_val >= 3 and current_val >= total_val * 0.1:
+            stage_started_at = entry.get("stage_started_at")
+            prev_stage = entry.get("prev_stage")
+            stable_stage = (
+                prev_stage is None
+                or (
+                    stage_started_at is not None
+                    and (time.monotonic() - float(stage_started_at)) >= 1.0
+                )
+            )
+            if stable_stage and elapsed_s > 0:
+                try:
+                    eta = (elapsed_s / current_val) * (total_val - current_val)
+                except ZeroDivisionError:
+                    eta = 0.0
+                if eta > 0 and eta == eta:  # NaN check
+                    suffix_plain_parts.append(f"· ~{eta:.0f}s left")
+        suffix_plain = " ".join(suffix_plain_parts)
+        # Clip the dim suffix to whatever space is left after the prefix.
+        remaining = max(0, detail_width - len(prefix_plain) - 1)
+        if suffix_plain and remaining > 4:
+            clipped_suffix = _clip_inline(suffix_plain, remaining)
+            return f"{prefix_styled} [dim]{clipped_suffix}[/dim]"
+        return prefix_styled
 
     def render(self) -> Panel:
         """Build the Rich renderable shown while the run is active."""
@@ -552,6 +723,27 @@ class _RunDashboard:
         if self.current_args:
             tool_label = f"{tool_label} [dim]{_clip_inline(self.current_args, max(20, content_width - 18))}[/dim]"
         current.add_row("Current", f"[cyan]{tool_label}[/cyan]")
+        # One row per active tool (caps at 3 to keep dashboard height bounded).
+        # Snapshot via list(...) first: Rich's refresh thread calls render()
+        # concurrently with heartbeat/worker threads mutating self.tool_active,
+        # so a bare ``.items()`` would race and may raise "dictionary changed
+        # size during iteration". list() materialization is GIL-atomic.
+        active_entries = sorted(
+            list(self.tool_active.items()), key=lambda kv: kv[1].get("start_ts", 0.0)
+        )
+        if len(active_entries) > 3:
+            active_entries = active_entries[:3]
+        # Advance the spinner once per render so all active rows step together.
+        self._spinner_idx = (self._spinner_idx + 1) % len(_SPINNER_GLYPHS)
+        spinner = _SPINNER_GLYPHS[self._spinner_idx]
+        bar_width = 6 if compact else 8
+        detail_width = max(20, content_width - 18)
+        for tool, entry in active_entries:
+            row_text = self._render_progress_row(
+                tool, entry, spinner, bar_width, compact, detail_width
+            )
+            if row_text:
+                current.add_row("Progress", row_text)
 
         timeline = Table(
             box=box.SIMPLE,
@@ -661,6 +853,14 @@ def _run_agent(
     from src.providers.chat import ChatLLM
     from src.agent.loop import AgentLoop
 
+    # Closure-level state for the no-rich path so dots and progress lines
+    # don't shoulder-bump each other (M3) and progress prints are throttled
+    # to ≤1/0.5s per tool (M1).
+    no_rich_state: dict[str, Any] = {
+        "dot_pending": False,
+        "last_progress_ts": {},  # type: ignore[var-annotated]
+    }
+
     def on_event(event_type: str, data: Dict[str, Any]) -> None:
         if not stream_output:
             return
@@ -675,6 +875,7 @@ def _run_agent(
             args = data.get("arguments", {})
             args_preview = _format_tool_call_args(tool, args)
             print(f"  - {tool}{_strip_rich_tags(args_preview)}", end="")
+            no_rich_state["dot_pending"] = False
             return
         if no_rich and event_type == "tool_result":
             tool = data.get("tool", "")
@@ -684,11 +885,48 @@ def _run_agent(
             preview = _format_tool_result_preview(tool, status, data.get("preview", ""))
             suffix = f"  {preview}" if preview else ""
             mark = "OK" if status == "ok" else "FAIL"
+            # If a heartbeat dot is open on the line, break it cleanly.
+            if no_rich_state["dot_pending"]:
+                no_rich_state["dot_pending"] = False
             print(f"  {mark} {elapsed_s:.1f}s{_strip_rich_tags(suffix)}")
+            no_rich_state["last_progress_ts"].pop(tool, None)
             return
         if no_rich and event_type == "compact":
             tokens = data.get("tokens_before", "?")
+            if no_rich_state["dot_pending"]:
+                no_rich_state["dot_pending"] = False
+                print()
             print(f"\n  context compressed ({tokens} tokens -> summary)\n")
+            return
+        if no_rich and event_type == "tool_heartbeat":
+            # Print a dot per tick so the user sees the tool is alive.
+            print(".", end="", flush=True)
+            no_rich_state["dot_pending"] = True
+            return
+        if no_rich and event_type == "tool_progress":
+            tool = data.get("tool", "") or ""
+            now = time.monotonic()
+            last_ts = no_rich_state["last_progress_ts"].get(tool, 0.0)
+            if now - last_ts < 0.5:
+                # Throttle: max one progress line per 0.5s per tool (M1).
+                return
+            no_rich_state["last_progress_ts"][tool] = now
+            stage = data.get("stage", "")
+            current_idx = data.get("current")
+            total = data.get("total")
+            message = data.get("message", "")
+            bits = [stage]
+            if isinstance(current_idx, int) and isinstance(total, int) and total > 0:
+                bits.append(f"{current_idx}/{total}")
+            if message:
+                bits.append(message)
+            label = " · ".join(b for b in bits if b)
+            if label:
+                # Break a pending dot line before printing the progress detail.
+                if no_rich_state["dot_pending"]:
+                    no_rich_state["dot_pending"] = False
+                    print()
+                print(f"    {label}", flush=True)
             return
         if event_type == "text_delta":
             if no_rich:
@@ -746,7 +984,71 @@ def _run_agent(
     if run_dir_override:
         agent.memory.run_dir = run_dir_override
 
-    return agent.run(user_message=prompt, history=history)
+    return _run_with_graceful_cancel(agent, prompt, history, no_rich=no_rich)
+
+
+def _run_with_graceful_cancel(
+    agent: "AgentLoop",
+    prompt: str,
+    history: Optional[List[Dict]],
+    *,
+    no_rich: bool,
+) -> dict:
+    """Run an agent loop with first-Ctrl+C = graceful cancel.
+
+    First SIGINT during the run sets ``agent._cancelled`` so the loop exits
+    cleanly after the current LLM/tool step finishes. A second SIGINT within
+    two seconds restores the default handler and re-raises ``KeyboardInterrupt``
+    for hard quit. Outside of a run the parent CLI's normal SIGINT handling
+    (exit on input prompt) is unaffected — the handler is restored in
+    ``finally``.
+
+    Args:
+        agent: AgentLoop instance ready to ``run()``.
+        prompt: User prompt.
+        history: Recent message history.
+        no_rich: Whether the parent caller is rendering with Rich Live.
+
+    Returns:
+        AgentLoop result dict.
+    """
+    import signal as _signal
+
+    state = {"requested": False, "last_ts": 0.0}
+    try:
+        original = _signal.getsignal(_signal.SIGINT)
+    except (ValueError, AttributeError):
+        # Not on a thread that can receive signals — skip the handler swap.
+        return agent.run(user_message=prompt, history=history)
+
+    def _on_sigint(_signum, _frame) -> None:
+        now = time.time()
+        if state["requested"] and (now - state["last_ts"]) < 2.0:
+            # Second Ctrl+C within 2s — hand control back to the default handler.
+            _signal.signal(_signal.SIGINT, original)
+            raise KeyboardInterrupt
+        state["requested"] = True
+        state["last_ts"] = now
+        agent.cancel()
+        notice = "Cancelling… current step will finish, then exit. Ctrl+C again to force quit."
+        if no_rich:
+            print(f"\n[{notice}]", flush=True)
+        else:
+            console.print(f"\n[yellow]{notice}[/yellow]")
+
+    try:
+        _signal.signal(_signal.SIGINT, _on_sigint)
+    except (ValueError, OSError):
+        # signal.signal only works on the main thread of the main interpreter.
+        return agent.run(user_message=prompt, history=history)
+
+    try:
+        return agent.run(user_message=prompt, history=history)
+    finally:
+        try:
+            _signal.signal(_signal.SIGINT, original)
+        except (ValueError, OSError):
+            pass
 
 
 def _build_benchmark_table(m: dict) -> Optional[Table]:
@@ -1240,6 +1542,7 @@ def _print_help() -> None:
         ("/swarm cancel <run_id>", "Cancel a team run"),
         ("/sessions", "List chat sessions"),
         ("/settings", "Show provider, model, timeout, and credentials"),
+        ("/stop", "How to gracefully cancel a running agent"),
         ("/clear", "Clear the terminal"),
         ("/quit", "Exit"),
         ("", ""),
@@ -1320,7 +1623,7 @@ def _show_settings() -> None:
             console.print(panel)
     else:
         console.print(Columns(panels, expand=True, equal=True))
-    console.print("[dim]Edit configuration in agent/.env, or run vibe-trading init.[/dim]")
+    console.print("[dim]Edit configuration in ~/.vibe-trading/.env, or run vibe-trading init.[/dim]")
 
 
 def _handle_slash_command(input_str: str, *, max_iter: int) -> None:
@@ -1367,6 +1670,12 @@ def _handle_slash_command(input_str: str, *, max_iter: int) -> None:
         cmd_sessions()
     elif cmd == "/settings":
         _show_settings()
+    elif cmd == "/stop":
+        console.print(
+            "[dim]No agent is running. Press [bold]Ctrl+C[/bold] during a run "
+            "to gracefully cancel — the current step finishes, then the loop "
+            "exits cleanly. Press Ctrl+C twice within 2 seconds to force quit.[/dim]"
+        )
     elif cmd == "/clear":
         console.clear()
         _print_welcome()
@@ -2382,7 +2691,7 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_list_parser.add_argument(
         "--type",
         dest="memory_type",
-        choices=_MEMORY_TYPES,
+        choices=MEMORY_TYPES,
         help="Filter by memory type",
     )
 
@@ -2435,7 +2744,7 @@ def _handle_prompt_command(
     return cmd_run(resolved_prompt, max_iter, json_mode=json_mode, no_rich=no_rich)
 
 
-_INIT_ENV_PATH = AGENT_DIR / ".env"
+_INIT_ENV_PATH = Path.home() / ".vibe-trading" / ".env"
 
 _PROVIDER_CHOICES: list[dict[str, str | None]] = [
     {
@@ -2553,7 +2862,7 @@ _PROVIDER_CHOICES: list[dict[str, str | None]] = [
         "provider": "ollama",
         "key_env": None,
         "base_env": "OLLAMA_BASE_URL",
-        "base_url": "http://localhost:11434/v1",
+        "base_url": "http://localhost:11434",
         "model": "qwen2.5:32b",
         "key_prefix": None,
         "key_placeholder": None,
@@ -2625,17 +2934,22 @@ def _render_env_content(config: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-# Kept in sync with MEMORY_TYPES in src/memory/persistent.py. Duplicated here
-# rather than imported so that `vibe-trading --version` / `--help` and other
-# non-memory commands skip loading the full agent runtime chain at startup.
-_MEMORY_TYPES = ("user", "feedback", "project", "reference")
+from src.memory.persistent import MEMORY_TYPES  # noqa: E402  source-of-truth for choices/invariants
+
 _MEMORY_TYPE_STYLES = {
     "user": "cyan",
     "feedback": "yellow",
     "project": "green",
     "reference": "magenta",
 }
-assert set(_MEMORY_TYPE_STYLES) == set(_MEMORY_TYPES), "_MEMORY_TYPE_STYLES drift: keys must mirror _MEMORY_TYPES"
+
+# Invariant: every persisted memory type has a display style. If a new type
+# is added in src.memory.persistent.MEMORY_TYPES, this assert fails fast
+# instead of silently rendering it in fallback white.
+assert set(_MEMORY_TYPE_STYLES) == set(MEMORY_TYPES), (
+    f"MEMORY_TYPES vs _MEMORY_TYPE_STYLES drift: "
+    f"types={sorted(MEMORY_TYPES)}, styles={sorted(_MEMORY_TYPE_STYLES)}"
+)
 
 
 def cmd_memory_list(memory_type: Optional[str] = None, *, memory_dir: Optional[Path] = None) -> int:
@@ -2758,7 +3072,7 @@ def cmd_memory_forget(name: str, *, yes: bool = False, memory_dir: Optional[Path
 
 
 def cmd_init() -> int:
-    """Interactive setup: create agent/.env."""
+    """Interactive setup: create ~/.vibe-trading/.env."""
     console.print(
         Panel(
             "[bold cyan]Vibe-Trading setup[/bold cyan]\n[dim]Configure the default LLM provider and data tokens.[/dim]",
@@ -2854,7 +3168,12 @@ def cmd_init() -> int:
     if tushare_token:
         env_values["TUSHARE_TOKEN"] = tushare_token
 
+    _INIT_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
     _INIT_ENV_PATH.write_text(_render_env_content(env_values), encoding="utf-8")
+    try:
+        _INIT_ENV_PATH.chmod(0o600)
+    except OSError:
+        pass
 
     next_steps = Table.grid(expand=True)
     next_steps.add_column(width=10, style="dim")
