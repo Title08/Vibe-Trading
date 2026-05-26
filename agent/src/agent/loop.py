@@ -413,8 +413,8 @@ class AgentLoop:
                     tools=self.registry.get_definitions(),
                     on_text_chunk=_on_text_chunk,
                 )
-                response_provider = response.provider or response_provider
-                response_model = response.model or response_model
+                response_provider = getattr(response, "provider", None) or response_provider
+                response_model = getattr(response, "model", None) or response_model
                 usage = getattr(response, "usage_metadata", None) or {}
                 if usage:
                     self._emit(
