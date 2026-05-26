@@ -33,7 +33,7 @@ if ChatOpenAI is not None:
           * _convert_message_to_dict — request serialization (outbound)
         Moonshot/DeepSeek emit `reasoning_content`; OpenRouter relays as
         `reasoning`. Inbound paths normalize to additional_kwargs["reasoning_content"];
-        outbound path re-injects it so strict providers (kimi-k2.5) accept
+        outbound path re-injects it so strict providers (kimi-k2.6) accept
         multi-turn continuations.
         """
 
@@ -73,7 +73,7 @@ if ChatOpenAI is not None:
             """Re-inject reasoning_content and normalize assistant content.
 
             LangChain strips ``reasoning_content`` when serializing AIMessages
-            back to OpenAI wire format. Moonshot kimi-k2.5 also rejects
+            back to OpenAI wire format. Moonshot kimi-k2.6 also rejects
             assistant turns where ``content`` is null or ``reasoning_content``
             is absent, breaking ReAct continuations after a tool call (#39).
             """
@@ -158,6 +158,40 @@ _ENV_LABELS = ("~/.vibe-trading/.env", "<AGENT_DIR>/.env", "<CWD>/.env")
 logger = logging.getLogger(__name__)
 
 _dotenv_loaded: bool = False
+
+
+def _extract_balanced_json(text: str) -> Dict[str, Any] | None:
+    """Extract and parse the first balanced JSON object in a string."""
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        in_string = False
+        escaped = False
+        for idx in range(start, len(text)):
+            ch = text[idx]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start : idx + 1]
+                    try:
+                        parsed = json.loads(candidate)
+                    except json.JSONDecodeError:
+                        break
+                    return parsed if isinstance(parsed, dict) else None
+        start = text.find("{", start + 1)
+    return None
 
 
 def _redact_env_source(loaded: Path | None) -> str:

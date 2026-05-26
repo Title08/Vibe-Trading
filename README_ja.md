@@ -46,12 +46,19 @@
 
 ## 📰 ニュース
 
-- **2026-05-19** ✨ **ツールのライブフィードバック + グレースフルキャンセル**: 長時間実行されるツール（バックテスト、大きい PDF、swarm worker）が固まったように見えなくなりました。各ツール呼び出しは 3 秒ごとのハートビートに加え、構造化された段階進捗を発行します — `run_backtest` はフェーズマーカー（`validate` / `simulate` / `finalize`）、`read_document` は PDF ではページ単位、Excel ではシート単位、`read_url` は `fetch` / `parse` をマーク。CLI の Rich Live ダッシュボードは Unicode スピナー、ASCII プログレスバー、ETA を描画し、ツール名でキー付けして最大 3 つの並列ツールをスタック表示します。フロントエンドのチャットには新規 `ToolProgressIndicator` を追加し、rAF コアレッシング、ARIA `role="status"` + スクリーンリーダー向けの非表示 `<progress>`、合計が既知の場合は determinate な `ProgressRing` SVG を備えます。CLI 実行中の最初の `Ctrl+C` は `agent.cancel()` を呼んでグレースフル終了（現在のステップが完了し、trace がクリーンに閉じる）し、2 秒以内に 2 度目を押すと強制終了します。再利用可能なプリミティブ `ProgressBar.tsx` と `lib/tools.ts`（共有ツール名 i18n マッピング）も抽出。
-- **2026-05-18** 🧹 **クリーンアップ + 3 つの潜在バグ修正**: `CompositeEngine` が取引所サフィックスのない中国先物コード（`RB2410` 等）を `GlobalFuturesEngine` に誤ルーティングしていた問題を修正。`_is_china_futures` を共有の `_market_hooks` モジュールに移し、製品コード表を大小文字正規化 + 非中国取引所のガードを追加、回帰ケース 9 件を新設しました。session FTS5 インデックスがタイムスタンプを永続化するようになり、クロスセッション検索を日付ソートできるようになりました。同じ修正で、re-upsert 経路が `started_at` を wall-clock で上書きしていた副次バグも解消しました。Vite 開発プロキシに `/alpha` を追加し、AlphaZoo ページが `npm run dev` で解決されるようになりました。`tests/test_e2e_harness_v2.py`（実 LLM の e2e スイート）は `VIBE_TRADING_RUN_LIVE_E2E=1` でゲート化し、CI が環境変数の有無で形を変えないようにしました。ruff に factor zoo 用の `per-file-ignores` を追加（F401 ノイズ 3783 → 0）、フロントエンド tsconfig は `noUnusedLocals` / `noUnusedParameters` を有効化して回帰ガードとし、`gtja191` alpha の未使用 `vw = vwap(...)` 雛形 76 件も削除しました。正味 **-918 行**。
-- **2026-05-17** 🧬 **Alpha Zoo v1（0.1.8）**: 4 つの zoo にまたがる 452 個の事前構築 quant alpha を同梱しました — `qlib158`（Microsoft Qlib の Alpha158 特徴量、Apache-2.0 出処明示）、`alpha101`（Kakushadze の "101 Formulaic Alphas" を arXiv:1601.00991 から論文ベースで書き直し）、`gtja191`（国泰君安 2014 年の短期取引型 alpha レポート）、`academic`（Fama-French 5 + Carhart 動量の価格ベース proxy 実装）。任意の universe で 1 行 CLI: `vibe-trading alpha bench --zoo gtja191 --universe csi300 --period 2018-2025`。AST 純関数ゲート、look-ahead ガードテスト、`pytest-socket` ネットワーク遮断、各 zoo ごとの LICENSE.md、コミュニティ PR 用の DCO 署名フローも同梱。Alpha Library 自動レンダリングは [vibetrading.wiki/alpha-library/](https://vibetrading.wiki/alpha-library/)、Research Lab には [Which of the 191 GTJA alphas still work in 2026?](https://vibetrading.wiki/research-lab/posts/alpha-191-in-2026.html) を公開。
+- **2026-05-26** ✅ **Research Goal ライフサイクルの閉ループ化**: Goal mode が実際のタスクランナーのように動くようになりました。Web UI で goal を作成すると session を作成または bind し、即座に kickoff turn を送ります。active goal は Web/API/CLI/MCP から continue/edit/cancel/complete でき、agent loop は最初の prompt だけでなく現在の goal snapshot（criteria、evidence、claims、open items）から前進します。criteria が covered でも goal が active のままなら silent stop ではなく audit/status update に入り、backend、CLI、MCP、frontend events の回帰で固定しました。
+- **2026-05-25** 🧼 **よりクリーンな Chat UI + composer workflow**: Web UI は次の入力に集中できる形になりました。upload、swarm、research-goal mode は composer の `+` メニューにまとまり、floating panel で会話を邪魔しません。現在の context は input 上の compact chip として表示され、goal details は chip クリック時だけ inline 展開されます。旧 custom i18n layer も削除し、直接 English copy に統一。Full Report card は report-worthy run のみに表示され、local dev startup/status reporting もブラウザ smoke test 向けに安定化しました。
+- **2026-05-24** 🎯 **Research Goal runtime**: backend、CLI、API/MCP、SSE、Web UI をまたぐ session-scoped Research Goal layer を追加しました。Goal は claim、acceptance criteria、evidence row、budget、completion policy を永続化します。agent tool は goal 作成と evidence 追加に対応し、`/goal` が CLI 入口になり、REST/MCP は goal snapshot と evidence write を公開し、SSE は chat client の状態を fresh に保ちます。後続 audit fixes では verified evidence をロックダウンし、agent tool からの live-trading risk tier をブロックし、CLI-created goal を後続 turn に接続し、session 削除時の goal ledger cleanup、replay-all 接続、frontend の cross-session snapshot race 修正を行いました。
 <details>
 <summary>過去のニュース</summary>
 
+- **2026-05-23** 🖥️ **インタラクティブ CLI の刷新**: ターミナル入口は大きな Vibe-Trading バナー、より見やすい prompt 区切り、前ターンの recap、実行後の所要時間、Claude Code 風の activity rail で live agent 作業を表示します。tool call、web/data fetch、shell 風 action、Markdown 回答、pipe table は読みやすい transcript として描画され、pipe や非 TTY 実行では自動化向けの plain-text 出力を維持します。生成 CLI スクリーンショットは committed docs ではなく local artifact として扱い、リポジトリを軽く保ちます。
+- **2026-05-22** 🧭 **Swarm リカバリ + MCP keepalive**: Swarm の状態は読み取りのたびに live task ファイルから reconcile されるようになり、API/MCP/SSE/list ビューはクラッシュ済みまたは stale な run を復旧し、永遠に `running` のスナップショットを見せ続けません。`run_swarm` は polling 中に MCP progress heartbeat を送り、transport drop 後に再接続するクライアントでも handle を拾えるよう最初のフレームを `swarm_started run_id=<id>` に固定しました。worker も LLM streaming、grounding fetch、tool execution の各段階で heartbeat を出します。stale-run reaper は run ごとの閾値を使い、task 状態から終端状態を導出します。`SwarmTool` は待機予算が尽きても進行中の team をキャンセルせず、MCP クライアントは `reap_stale_runs()` で明示的に cleanup できます。今日の DX pass では provider の既定モデルも更新し、CI syntax check を新しい `agent/cli/` パッケージに合わせました。hydrate、終端復旧、stale reap、keepalive cadence、env parsing、heartbeat wiring を 22 件の新規回帰テストでカバーし、swarm/MCP 全体スイートは 169 passed、4 skipped です。
+- **2026-05-21** 🧱 **CLI パッケージリファクタ**: `agent/cli.py`（3216 LOC）を `agent/cli/` パッケージへ分割 — インタラクティブな入口、slash ルーター、Rich コンポーネント、そしてすべてのサブコマンドを保ち `cli.cmd_*` / `cli._INIT_ENV_PATH` / `cli.Confirm` などの公開シンボルを再エクスポートする `_legacy.py` shim。新しい FastAPI ミドルウェアはブラウザが `/runs/{id}` または `/correlation` を直接開いた際に SPA シェルを返し、同じ絞り込みを Vite dev プロキシにも反映。バージョン文字列は `cli/_version.py` で一本化（`--version` とバナーのドリフト解消）、`python -m cli` を `__main__.py` で復活、chat ゲートを絞り `chat --help` / `chat extra` は REPL に飲み込まれずレガシー argparse に届きます。
+- **2026-05-20** 🔬 **Hypothesis Registry CLI**: 2026-05-16 にバックエンドのみで公開された Hypothesis Registry の CLI 側を完成させました。`vibe-trading hypothesis list` は Rich テーブルまたは JSON を出力（`--status` フィルタと `--limit` をサポート）、`show <id>` はリンクされた run card を含む詳細パネルを描画、`invalidate <id> --note "..."` はステータスを `rejected` に切り替え、`--note` を省略すると既存の invalidation notes を保持します。既存の `VIBE_TRADING_HYPOTHESES_PATH` 環境変数オーバーライドに加え、呼び出し単位の `--path` も使えます。配線、JSON 出力、ステータスフィルタ、limit、ID 不在エラー、ノート永続化を 22 のテストでカバー。
+- **2026-05-19** ✨ **ツールのライブフィードバック + グレースフルキャンセル**: 長時間実行されるツール（バックテスト、大きい PDF、swarm worker）が固まったように見えなくなりました。各ツール呼び出しは 3 秒ごとのハートビートに加え、構造化された段階進捗を発行します — `run_backtest` はフェーズマーカー（`validate` / `simulate` / `finalize`）、`read_document` は PDF ではページ単位、Excel ではシート単位、`read_url` は `fetch` / `parse` をマーク。CLI の Rich Live ダッシュボードは Unicode スピナー、ASCII プログレスバー、ETA を描画し、ツール名でキー付けして最大 3 つの並列ツールをスタック表示します。フロントエンドのチャットには新規 `ToolProgressIndicator` を追加し、rAF コアレッシング、ARIA `role="status"` + スクリーンリーダー向けの非表示 `<progress>`、合計が既知の場合は determinate な `ProgressRing` SVG を備えます。CLI 実行中の最初の `Ctrl+C` は `agent.cancel()` を呼んでグレースフル終了（現在のステップが完了し、trace がクリーンに閉じる）し、2 秒以内に 2 度目を押すと強制終了します。再利用可能なプリミティブ `ProgressBar.tsx` と `lib/tools.ts`（共有ツール名 i18n マッピング）も抽出。
+- **2026-05-18** 🧹 **クリーンアップ + 3 つの潜在バグ修正**: `CompositeEngine` が取引所サフィックスのない中国先物コード（`RB2410` 等）を `GlobalFuturesEngine` に誤ルーティングしていた問題を修正。`_is_china_futures` を共有の `_market_hooks` モジュールに移し、製品コード表を大小文字正規化 + 非中国取引所のガードを追加、回帰ケース 9 件を新設しました。session FTS5 インデックスがタイムスタンプを永続化するようになり、クロスセッション検索を日付ソートできるようになりました。同じ修正で、re-upsert 経路が `started_at` を wall-clock で上書きしていた副次バグも解消しました。Vite 開発プロキシに `/alpha` を追加し、AlphaZoo ページが `npm run dev` で解決されるようになりました。`tests/test_e2e_harness_v2.py`（実 LLM の e2e スイート）は `VIBE_TRADING_RUN_LIVE_E2E=1` でゲート化し、CI が環境変数の有無で形を変えないようにしました。ruff に factor zoo 用の `per-file-ignores` を追加（F401 ノイズ 3783 → 0）、フロントエンド tsconfig は `noUnusedLocals` / `noUnusedParameters` を有効化して回帰ガードとし、`gtja191` alpha の未使用 `vw = vwap(...)` 雛形 76 件も削除しました。正味 **-918 行**。
+- **2026-05-17** 🧬 **Alpha Zoo v1（0.1.8）**: 4 つの zoo にまたがる 452 個の事前構築 quant alpha を同梱しました — `qlib158`（Microsoft Qlib の Alpha158 特徴量、Apache-2.0 出処明示）、`alpha101`（Kakushadze の "101 Formulaic Alphas" を arXiv:1601.00991 から論文ベースで書き直し）、`gtja191`（国泰君安 2014 年の短期取引型 alpha レポート）、`academic`（Fama-French 5 + Carhart 動量の価格ベース proxy 実装）。任意の universe で 1 行 CLI: `vibe-trading alpha bench --zoo gtja191 --universe csi300 --period 2018-2025`。AST 純関数ゲート、look-ahead ガードテスト、`pytest-socket` ネットワーク遮断、各 zoo ごとの LICENSE.md、コミュニティ PR 用の DCO 署名フローも同梱。Alpha Library 自動レンダリングは [vibetrading.wiki/alpha-library/](https://vibetrading.wiki/alpha-library/)、Research Lab には [Which of the 191 GTJA alphas still work in 2026?](https://vibetrading.wiki/research-lab/posts/alpha-191-in-2026.html) を公開。
 - **2026-05-16** 🧪 **リサーチ基盤アップデート**: backend Hypothesis Registry を追加し、`create_hypothesis`、`update_hypothesis`、`link_backtest`、`search_hypotheses` を提供します。外部コンテンツ reader は warning-only の `security_warnings` を付与し、Shadow Account scanner は旧 calendar-phase stub から決定的な OHLCV feature evaluation に移行しました。
 - **2026-05-15** 🪪 Run 詳細ページが metrics と artifacts の隣に Trust Layer の run card を描画するようになり、2026-05-12 に入った `run_card.json` 側の UI 半分が揃いました。`PersistentMemory.add()` も #108/#109/#110 の triage を受け、長さ、空・空白だけの name、C0/C1 制御バイトの各経路で強化されました（[#112](https://github.com/HKUDS/Vibe-Trading/pull/112)、@Teerapat-Vatpitak に感謝）。
 - **2026-05-14** 🌐 公開 Wiki が [vibetrading.wiki](https://vibetrading.wiki/) で公開され、docs、tutorials、Research Lab、Alpha Library セクションを Cloudflare Pages から配信します。永続メモリも CLI から `vibe-trading memory list/show/search/forget` で確認できるようになり（[#102](https://github.com/HKUDS/Vibe-Trading/pull/102)、@Teerapat-Vatpitak に感謝）、メモリの tokenization/slug はタイ語、アラビア語、ヘブライ語、キリル文字にも対応しました（[#104](https://github.com/HKUDS/Vibe-Trading/pull/104)）。
@@ -451,8 +458,8 @@ Vibe-Trading は tool-heavy agent です。skills、backtests、memory、swarms 
 
 | Tier | Examples | When to use |
 |------|----------|-------------|
-| **Best** | `anthropic/claude-opus-4.7`, `anthropic/claude-sonnet-4.6`, `openai/gpt-5.4`, `google/gemini-3.1-pro-preview` | 複雑な swarms（3+ agents）、長い research sessions、paper-grade analysis |
-| **Sweet spot** (default) | `deepseek-v4-pro`, `deepseek/deepseek-v4-pro`, `x-ai/grok-4.20`, `z-ai/glm-5.1`, `moonshotai/kimi-k2.5`, `qwen/qwen3-max-thinking` | 日常使い。信頼できる tool-calling を約 1/10 の cost で |
+| **Best** | `anthropic/claude-opus-4.7`, `anthropic/claude-sonnet-4.6`, `openai/gpt-5.5-pro`, `google/gemini-3.5-flash` | 複雑な swarms（3+ agents）、長い research sessions、paper-grade analysis |
+| **Sweet spot** (default) | `deepseek-v4-pro`, `deepseek/deepseek-v4-pro`, `x-ai/grok-4.20`, `z-ai/glm-5.1`, `moonshotai/kimi-k2.6`, `qwen/qwen3-max-thinking` | 日常使い。信頼できる tool-calling を約 1/10 の cost で |
 | **Avoid for agent use** | `*-nano`, `*-flash-lite`, `*-coder-next`, small / distilled variants | Tool-calling が不安定です。agent は skills 読み込みや backtests 実行ではなく「記憶から答えている」ように見えます |
 
 既定の `agent/.env.example` は DeepSeek official API + `deepseek-v4-pro` で出荷されています。OpenRouter users は `deepseek/deepseek-v4-pro` を利用できます。
@@ -756,7 +763,7 @@ OpenSpace は 75 skills を自動検出し、auto-fix、auto-improve、community
 ```
 Vibe-Trading/
 ├── agent/                          # バックエンド (Python)
-│   ├── cli.py                      # CLI エントリポイント — インタラクティブ TUI + サブコマンド
+│   ├── cli/                        # CLI パッケージ — インタラクティブ TUI + サブコマンド
 │   ├── api_server.py               # FastAPI サーバー — runs、sessions、upload、swarm、SSE
 │   ├── mcp_server.py               # MCP サーバー — OpenClaw / Claude Desktop 向け 22 tools
 │   │
@@ -828,21 +835,25 @@ Vibe-Trading は **[HKUDS](https://github.com/HKUDS)** agent ecosystem の一部
 
 <table>
   <tr>
-    <td align="center" width="25%">
-      <a href="https://github.com/HKUDS/ClawTeam"><b>ClawTeam</b></a><br>
-      <sub>Agent Swarm Intelligence</sub>
-    </td>
-    <td align="center" width="25%">
+    <td align="center" width="20%">
       <a href="https://github.com/HKUDS/nanobot"><b>NanoBot</b></a><br>
       <sub>Ultra-Lightweight Personal AI Assistant</sub>
     </td>
-    <td align="center" width="25%">
+    <td align="center" width="20%">
+      <a href="https://github.com/HKUDS/AI-Trader"><b>AI-Trader</b></a><br>
+      <sub>Agent-Native Signal &amp; Copy Trading Platform</sub>
+    </td>
+    <td align="center" width="20%">
       <a href="https://github.com/HKUDS/CLI-Anything"><b>CLI-Anything</b></a><br>
       <sub>Making All Software Agent-Native</sub>
     </td>
-    <td align="center" width="25%">
+    <td align="center" width="20%">
       <a href="https://github.com/HKUDS/OpenSpace"><b>OpenSpace</b></a><br>
       <sub>Self-Evolving AI Agent Skills</sub>
+    </td>
+    <td align="center" width="20%">
+      <a href="https://github.com/HKUDS/ClawTeam"><b>ClawTeam</b></a><br>
+      <sub>Agent Swarm Intelligence</sub>
     </td>
   </tr>
 </table>

@@ -11,6 +11,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import signal
 import time
 import csv
@@ -26,6 +27,7 @@ from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from rich.console import Console
 
+from src.goal.context import default_goal_criteria
 from src.ui_services import build_run_analysis, load_run_context
 
 # UTF-8 on Windows
@@ -237,6 +239,105 @@ class MessageResponse(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+class CreateGoalRequest(BaseModel):
+    """Create or replace a finance research goal."""
+
+    objective: str = Field(..., min_length=1, max_length=5000)
+    criteria: List[str] = Field(default_factory=list)
+    ui_summary: str = ""
+    protocol: str = "thesis_review"
+    risk_tier: str = "research_general"
+    token_budget: Optional[int] = Field(None, ge=1)
+    turn_budget: Optional[int] = Field(None, ge=1)
+    time_budget_seconds: Optional[int] = Field(None, ge=1)
+
+
+class UpdateGoalRequest(BaseModel):
+    """Edit mutable finance research goal fields."""
+
+    goal_id: str = Field(..., min_length=1)
+    expected_goal_id: str = Field(..., min_length=1)
+    objective: Optional[str] = Field(None, min_length=1, max_length=5000)
+    ui_summary: Optional[str] = Field(None, max_length=500)
+
+
+class AddGoalEvidenceRequest(BaseModel):
+    """Append evidence to a finance research goal."""
+
+    goal_id: str = Field(..., min_length=1)
+    expected_goal_id: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=10000)
+    criterion_id: Optional[str] = None
+    claim_id: Optional[str] = None
+    evidence_type: str = "evidence"
+    tool_call_id: Optional[str] = None
+    run_id: Optional[str] = None
+    source_provider: Optional[str] = None
+    source_type: Optional[str] = None
+    source_uri: Optional[str] = None
+    symbol_universe: List[str] = Field(default_factory=list)
+    benchmark: List[str] = Field(default_factory=list)
+    timeframe: Optional[str] = None
+    method: Optional[str] = None
+    assumptions: Dict[str, Any] = Field(default_factory=dict)
+    artifact_path: Optional[str] = None
+    artifact_hash: Optional[str] = None
+    data_as_of: Optional[str] = None
+    confidence: Optional[str] = None
+    caveat: Optional[str] = None
+    contradicts_claim_ids: List[str] = Field(default_factory=list)
+
+
+class GoalSnapshotResponse(BaseModel):
+    """Finance research goal snapshot."""
+
+    goal: Dict[str, Any]
+    claims: List[Dict[str, Any]]
+    criteria: List[Dict[str, Any]]
+    evidence: List[Dict[str, Any]]
+    evidence_count: int = 0
+
+
+class AddGoalEvidenceResponse(BaseModel):
+    """Response after appending goal evidence."""
+
+    evidence: Dict[str, Any]
+    snapshot: GoalSnapshotResponse
+
+
+class GoalAuditRowRequest(BaseModel):
+    """One criterion row for goal status audits."""
+
+    criterion_id: str = Field(..., min_length=1)
+    result: str = Field(..., min_length=1)
+    evidence_ids: List[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class UpdateGoalStatusRequest(BaseModel):
+    """Update a finance research goal status."""
+
+    goal_id: str = Field(..., min_length=1)
+    expected_goal_id: str = Field(..., min_length=1)
+    status: str = Field(..., min_length=1)
+    audit: List[GoalAuditRowRequest] = Field(default_factory=list)
+    recap: Optional[str] = None
+
+
+class UpdateGoalStatusResponse(BaseModel):
+    """Response after changing a goal status."""
+
+    goal: Dict[str, Any]
+    snapshot: GoalSnapshotResponse
+
+
+class UpdateGoalResponse(BaseModel):
+    """Response after editing a goal."""
+
+    goal: Dict[str, Any]
+    snapshot: GoalSnapshotResponse
+
+
 
 # ============================================================================
 # FastAPI Application
@@ -295,6 +396,61 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ----------------------------------------------------------------------------
+# SPA deep-link fallback
+# ----------------------------------------------------------------------------
+# A handful of API routes share their path with frontend SPA routes (e.g.
+# ``/runs/{id}`` and ``/correlation``). Because FastAPI matches registered
+# routes before the static SPA mount, a browser that refreshes or bookmarks
+# one of these URLs would receive JSON (or 401/422) instead of the SPA shell.
+# The middleware below serves ``frontend/dist/index.html`` when the request
+# clearly came from a browser (``Accept`` contains ``text/html``); programmatic
+# clients are routed to the real API handler as before.
+#
+# Patterns are written narrowly so the SPA shell only shadows paths that
+# actually correspond to frontend pages. In particular ``/runs/{id}`` is
+# the RunDetail page, but ``/runs/{id}/code`` and ``/runs/{id}/pine`` are
+# API-only endpoints with no SPA route — using a broad ``/runs/`` prefix
+# here would incorrectly hijack those when the browser sets ``Accept:
+# text/html`` (e.g. a user pasting the URL into the address bar).
+
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+_SPA_HTML_EXACT_PATHS: frozenset[str] = frozenset({"/correlation"})
+# Each regex matches a complete request path. Trailing slash optional.
+_SPA_HTML_PATH_REGEX: tuple[re.Pattern[str], ...] = (
+    # ``/runs/{run_id}`` — RunDetail page. Excludes ``/runs/{id}/code``,
+    # ``/runs/{id}/pine`` (API only) and ``/runs`` (collection endpoint).
+    re.compile(r"^/runs/[^/]+/?$"),
+)
+
+
+def _is_spa_html_route(path: str) -> bool:
+    """Return True when ``path`` corresponds to a frontend SPA page that
+    shadows an API endpoint and should fall back to ``index.html`` on
+    browser navigation."""
+    if path in _SPA_HTML_EXACT_PATHS:
+        return True
+    return any(pattern.match(path) for pattern in _SPA_HTML_PATH_REGEX)
+
+
+@app.middleware("http")
+async def _spa_html_deep_link_fallback(request: Request, call_next):
+    """Serve ``frontend/dist/index.html`` when a browser navigates directly to
+    an SPA path that also exists as an API endpoint.
+
+    Conflicts: ``/runs/{id}`` (RunDetail page vs API) and ``/correlation``
+    (Correlation page vs API). Programmatic clients (``Accept: */*`` or
+    ``application/json``) still hit the real API handler.
+    """
+    if request.method == "GET":
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept and _is_spa_html_route(request.url.path):
+            index = _FRONTEND_DIST / "index.html"
+            if index.exists():
+                return FileResponse(str(index))
+    return await call_next(request)
 
 
 @app.on_event("startup")
@@ -1267,6 +1423,7 @@ async def api_info():
 # ============================================================================
 
 _session_service = None
+_goal_store = None
 
 
 def _get_session_service():
@@ -1298,6 +1455,26 @@ def _get_session_service():
         runs_dir=RUNS_DIR,
     )
     return _session_service
+
+
+def _get_goal_store():
+    """Return the shared finance goal store."""
+    global _goal_store
+    if _goal_store is None:
+        from src.goal import GoalStore
+
+        _goal_store = GoalStore()
+    return _goal_store
+
+
+def _get_existing_session_or_404(session_id: str):
+    svc = _get_session_service()
+    if not svc:
+        raise HTTPException(status_code=501, detail="Session runtime not enabled")
+    session = svc.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    return svc, session
 
 
 @app.post("/sessions", response_model=SessionResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_auth)])
@@ -1357,6 +1534,205 @@ async def get_session(session_id: str):
     )
 
 
+@app.post(
+    "/sessions/{session_id}/goal",
+    response_model=GoalSnapshotResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_auth)],
+)
+async def create_session_goal(session_id: str, req: CreateGoalRequest):
+    """Create or replace the current finance research goal for a session."""
+    _validate_path_param(session_id, "session_id")
+    svc, _session = _get_existing_session_or_404(session_id)
+    from src.goal import RiskTier
+
+    criteria = [item.strip() for item in req.criteria if item.strip()]
+    if not criteria:
+        criteria = default_goal_criteria()
+    try:
+        risk_tier = RiskTier(req.risk_tier)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid risk_tier: {req.risk_tier}") from exc
+    if risk_tier is RiskTier.LIVE_TRADING_OR_EXECUTION:
+        raise HTTPException(status_code=400, detail="live trading or execution goals are not supported")
+
+    goal_store = _get_goal_store()
+    try:
+        goal = goal_store.replace_goal(
+            session_id=session_id,
+            objective=req.objective,
+            criteria=criteria,
+            ui_summary=req.ui_summary,
+            source="api",
+            protocol=req.protocol,
+            risk_tier=risk_tier,
+            token_budget=req.token_budget,
+            turn_budget=req.turn_budget,
+            time_budget_seconds=req.time_budget_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    snapshot = goal_store.get_goal_snapshot(goal.goal_id)
+    if snapshot is None:
+        raise HTTPException(status_code=500, detail="Goal created but could not be reloaded")
+    svc.event_bus.emit(session_id, "goal.created", {"goal": snapshot["goal"]})
+    return snapshot
+
+
+@app.get(
+    "/sessions/{session_id}/goal",
+    response_model=GoalSnapshotResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def get_session_goal(session_id: str):
+    """Return the current finance research goal snapshot for a session."""
+    _validate_path_param(session_id, "session_id")
+    _get_existing_session_or_404(session_id)
+    snapshot = _get_goal_store().get_current_snapshot(session_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="No current goal")
+    return snapshot
+
+
+@app.patch(
+    "/sessions/{session_id}/goal",
+    response_model=UpdateGoalResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def update_session_goal(session_id: str, req: UpdateGoalRequest):
+    """Edit the current finance research goal without replacing the session."""
+    _validate_path_param(session_id, "session_id")
+    svc, _session = _get_existing_session_or_404(session_id)
+    from src.goal import StaleGoalError
+
+    if req.objective is None and req.ui_summary is None:
+        raise HTTPException(status_code=400, detail="objective or ui_summary is required")
+
+    goal_store = _get_goal_store()
+    try:
+        goal = goal_store.update_goal(
+            session_id=session_id,
+            goal_id=req.goal_id,
+            expected_goal_id=req.expected_goal_id,
+            objective=req.objective,
+            ui_summary=req.ui_summary,
+        )
+    except StaleGoalError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    snapshot = goal_store.get_goal_snapshot(goal.goal_id)
+    if snapshot is None:
+        raise HTTPException(status_code=500, detail="Goal snapshot could not be reloaded")
+    svc.event_bus.emit(session_id, "goal.updated", {"goal": snapshot["goal"], "snapshot": snapshot})
+    return {"goal": snapshot["goal"], "snapshot": snapshot}
+
+
+@app.post(
+    "/sessions/{session_id}/goal/evidence",
+    response_model=AddGoalEvidenceResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_auth)],
+)
+async def add_session_goal_evidence(session_id: str, req: AddGoalEvidenceRequest):
+    """Append traceable evidence to the current finance research goal."""
+    _validate_path_param(session_id, "session_id")
+    svc, _session = _get_existing_session_or_404(session_id)
+    from dataclasses import asdict
+    from src.goal import EvidenceInput, StaleGoalError
+
+    goal_store = _get_goal_store()
+    try:
+        evidence = goal_store.append_evidence(
+            session_id=session_id,
+            goal_id=req.goal_id,
+            expected_goal_id=req.expected_goal_id,
+            evidence=EvidenceInput(
+                criterion_id=req.criterion_id,
+                claim_id=req.claim_id,
+                evidence_type=req.evidence_type,
+                text=req.text,
+                tool_call_id=req.tool_call_id,
+                run_id=req.run_id,
+                source_provider=req.source_provider,
+                source_type=req.source_type,
+                source_uri=req.source_uri,
+                symbol_universe=req.symbol_universe,
+                benchmark=req.benchmark,
+                timeframe=req.timeframe,
+                method=req.method,
+                assumptions=req.assumptions,
+                artifact_path=req.artifact_path,
+                artifact_hash=req.artifact_hash,
+                data_as_of=req.data_as_of,
+                confidence=req.confidence,
+                caveat=req.caveat,
+                contradicts_claim_ids=req.contradicts_claim_ids,
+            ),
+        )
+    except StaleGoalError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    snapshot = goal_store.get_goal_snapshot(req.goal_id)
+    if snapshot is None:
+        raise HTTPException(status_code=500, detail="Goal snapshot could not be reloaded")
+    svc.event_bus.emit(
+        session_id,
+        "goal.evidence",
+        {"evidence": asdict(evidence), "goal_id": req.goal_id},
+    )
+    return {"evidence": asdict(evidence), "snapshot": snapshot}
+
+
+@app.patch(
+    "/sessions/{session_id}/goal/status",
+    response_model=UpdateGoalStatusResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def update_session_goal_status(session_id: str, req: UpdateGoalStatusRequest):
+    """Update the current finance research goal status."""
+    _validate_path_param(session_id, "session_id")
+    svc, _session = _get_existing_session_or_404(session_id)
+    from src.goal import AuditRow, GoalStatus, StaleGoalError
+
+    try:
+        next_status = GoalStatus(req.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid goal status: {req.status}") from exc
+
+    goal_store = _get_goal_store()
+    try:
+        goal = goal_store.update_status(
+            session_id=session_id,
+            goal_id=req.goal_id,
+            expected_goal_id=req.expected_goal_id,
+            status=next_status,
+            audit=[
+                AuditRow(
+                    criterion_id=row.criterion_id,
+                    result=row.result,
+                    evidence_ids=row.evidence_ids,
+                    notes=row.notes,
+                )
+                for row in req.audit
+            ],
+            recap=req.recap,
+        )
+    except StaleGoalError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    snapshot = goal_store.get_goal_snapshot(goal.goal_id)
+    if snapshot is None:
+        raise HTTPException(status_code=500, detail="Goal snapshot could not be reloaded")
+    svc.event_bus.emit(session_id, "goal.updated", {"goal": snapshot["goal"], "snapshot": snapshot})
+    return {"goal": snapshot["goal"], "snapshot": snapshot}
+
+
 @app.delete("/sessions/{session_id}", dependencies=[Depends(require_auth)])
 async def delete_session(session_id: str):
     """Delete a session."""
@@ -1367,6 +1743,7 @@ async def delete_session(session_id: str):
     deleted = svc.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    _get_goal_store().delete_session_goals(session_id)
     return {"status": "deleted", "session_id": session_id}
 
 
@@ -1454,6 +1831,7 @@ async def session_events(
     session_id: str,
     request: Request,
     last_event_id: Optional[str] = Query(None, alias="Last-Event-ID"),
+    replay: Optional[str] = Query(None),
 ):
     """SSE stream for agent events."""
     _validate_path_param(session_id, "session_id")
@@ -1466,9 +1844,19 @@ async def session_events(
 
     header_id = request.headers.get("Last-Event-ID")
     event_id = header_id or last_event_id
+    replay_active = (replay or "").lower() == "active"
+    replay_all = False
+    if replay_active and not event_id and session.last_attempt_id:
+        attempt = svc.store.get_attempt(session_id, session.last_attempt_id)
+        attempt_status = getattr(attempt.status, "value", attempt.status) if attempt else None
+        replay_all = attempt_status == "running"
 
     async def event_generator():
-        async for event in svc.event_bus.subscribe(session_id, last_event_id=event_id):
+        async for event in svc.event_bus.subscribe(
+            session_id,
+            last_event_id=event_id,
+            replay_all=replay_all,
+        ):
             if await request.is_disconnected():
                 break
             yield event.to_sse()
@@ -1544,20 +1932,19 @@ async def upload_file(file: UploadFile):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
     filename = Path(file.filename).name
-    ext = Path(file.filename).suffix.lower()
+    ext = Path(filename).suffix.lower()
     if ext in _BLOCKED_UPLOAD_EXT or filename.lower() in _BLOCKED_UPLOAD_NAMES:
         raise HTTPException(
             status_code=400,
             detail="This file type is not allowed for upload.",
         )
 
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-
     safe_name = f"{uuid.uuid4().hex}{ext}"
     dest = UPLOADS_DIR / safe_name
     total_size = 0
 
     try:
+        UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
         with dest.open("wb") as handle:
             while True:
                 chunk = await file.read(_UPLOAD_CHUNK_SIZE)
@@ -1578,14 +1965,17 @@ async def upload_file(file: UploadFile):
     except OSError as exc:
         if dest.exists():
             dest.unlink()
-        raise HTTPException(status_code=500, detail=f"Failed to store upload: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail="Upload failed while storing the file. Please retry or choose a different file.",
+        ) from exc
     finally:
         await file.close()
 
     return {
         "status": "ok",
-        "file_path": str(dest.resolve()),
-        "filename": file.filename,
+        "file_path": f"uploads/{safe_name}",
+        "filename": filename,
     }
 
 
@@ -1637,46 +2027,45 @@ async def create_swarm_run(payload: dict, http_request: Request):
 
 @app.get("/swarm/runs", dependencies=[Depends(require_auth)])
 async def list_swarm_runs(limit: int = Query(20, ge=1, le=100)):
-    """List swarm runs (newest first)."""
+    """List swarm runs (newest first), reconciled."""
     runtime = _get_swarm_runtime()
     runs = runtime._store.list_runs(limit=limit)
-    return [
-        {
-            "id": r.id,
-            "preset_name": r.preset_name,
-            "status": r.status.value,
-            "created_at": r.created_at,
-            "task_count": len(r.tasks),
-            "completed_count": sum(1 for t in r.tasks if t.status.value == "completed"),
-        }
-        for r in runs
-    ]
+    items = []
+    for r in runs:
+        # Reconcile each row: a zombie running run will be auto-finalized so
+        # the dashboard never shows a permanent "running" stuck row.
+        reconciled = runtime._store.reconcile_run(r, write=True)
+        items.append(
+            {
+                "id": reconciled.id,
+                "preset_name": reconciled.preset_name,
+                "status": reconciled.status.value,
+                "is_stale": runtime._store.is_run_stale(reconciled),
+                "created_at": reconciled.created_at,
+                "completed_at": reconciled.completed_at,
+                "task_count": len(reconciled.tasks),
+                "completed_count": sum(1 for t in reconciled.tasks if t.status.value == "completed"),
+            }
+        )
+    return items
 
 
 @app.get("/swarm/runs/{run_id}", dependencies=[Depends(require_auth)])
 async def get_swarm_run(run_id: str):
-    """Swarm run detail including task statuses."""
-    from src.swarm.task_store import TaskStore
-
+    """Swarm run detail including task statuses (reconciled)."""
     _validate_path_param(run_id, "run_id")
     runtime = _get_swarm_runtime()
-    run = runtime._store.load_run(run_id)
-    if not run:
+    loaded = runtime._store.load_run(run_id)
+    if not loaded:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
-    # Merge real-time task statuses from task_store (updated during execution)
-    run_dir = runtime._store.run_dir(run_id)
-    tasks_dir = run_dir / "tasks"
-    if tasks_dir.exists():
-        task_store = TaskStore(run_dir)
-        live_tasks = task_store.load_all()
-        if live_tasks:
-            run.tasks = live_tasks
+    run = runtime._store.reconcile_run(loaded, write=True)
 
     return {
         "id": run.id,
         "preset_name": run.preset_name,
         "status": run.status.value,
+        "is_stale": runtime._store.is_run_stale(run),
         "user_vars": run.user_vars,
         "agents": [a.model_dump() for a in run.agents],
         "tasks": [t.model_dump() for t in run.tasks],
@@ -1704,9 +2093,14 @@ async def swarm_run_events(run_id: str, request: Request, last_index: int = Quer
                 idx += 1
                 yield f"id: {idx}\nevent: {evt.type}\ndata: {json.dumps(evt.model_dump(), ensure_ascii=False)}\n\n"
             run = runtime._store.load_run(run_id)
-            if run and run.status.value in ("completed", "failed", "cancelled"):
-                yield f"event: done\ndata: {{\"status\": \"{run.status.value}\"}}\n\n"
-                break
+            if run:
+                # Reconcile so a zombie running run can still close this SSE
+                # stream cleanly — without it, a dead host would keep the
+                # stream open forever and block the dashboard's "done" state.
+                reconciled = runtime._store.reconcile_run(run, write=True)
+                if reconciled.status.value in ("completed", "failed", "cancelled"):
+                    yield f"event: done\ndata: {{\"status\": \"{reconciled.status.value}\"}}\n\n"
+                    break
             await asyncio.sleep(2)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

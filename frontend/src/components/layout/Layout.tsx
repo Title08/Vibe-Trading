@@ -17,7 +17,6 @@ import {
   Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useI18n } from "@/lib/i18n";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { api, type SessionItem } from "@/lib/api";
 import { useAgentStore } from "@/stores/agent";
@@ -26,35 +25,18 @@ import { ConnectionBanner } from "@/components/layout/ConnectionBanner";
 // Bump on each release; one place keeps the footer in sync with package.json.
 const APP_VERSION = "v0.1.8";
 
-// NAV entries: `key` looks up label in i18n; `label` overrides (used for "Alpha Zoo").
 const NAV = [
-  { to: "/agent", icon: Bot, key: "agent" as const, label: null },
-  { to: "/", icon: BarChart3, key: "home" as const, label: null },
-  {
-    to: "/compare",
-    icon: GitCompare,
-    key: "strategyComparison" as const,
-    label: null,
-  },
-  {
-    to: "/alpha-zoo",
-    icon: Layers,
-    key: "alphaZoo" as const,
-    label: "Alpha Zoo",
-  },
-  {
-    to: "/correlation",
-    icon: Activity,
-    key: "correlation" as const,
-    label: null,
-  },
-  { to: "/settings", icon: Settings, key: "settings" as const, label: null },
+  { to: "/", icon: BarChart3, label: "Home" },
+  { to: "/agent", icon: Bot, label: "Agent" },
+  { to: "/compare", icon: GitCompare, label: "Strategy Comparison" },
+  { to: "/alpha-zoo", icon: Layers, label: "Alpha Zoo" },
+  { to: "/correlation", icon: Activity, label: "Correlation Matrix" },
+  { to: "/settings", icon: Settings, label: "Settings" },
 ];
 
 export function Layout() {
   const { pathname } = useLocation();
   const [searchParams] = useSearchParams();
-  const { t } = useI18n();
   const { dark, toggle } = useDarkMode();
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -158,8 +140,8 @@ export function Layout() {
 
         {/* Nav */}
         <nav className={cn("space-y-1", collapsed ? "p-1.5" : "p-2.5")}>
-          {NAV.map(({ to, icon: Icon, key, label }) => {
-            const text = label ?? t[key];
+          {NAV.map(({ to, icon: Icon, label }) => {
+            const text = label;
             return (
               <Link
                 key={to}
@@ -191,12 +173,12 @@ export function Layout() {
             <div className="flex items-center justify-between px-4 py-3">
               <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                 <MessageSquare className="h-3.5 w-3.5" />
-                {t.sessions}
+                Sessions
               </span>
               <Link
                 to="/agent"
                 className="flex items-center gap-1 rounded-md p-1 text-xs text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary cursor-pointer"
-                title={t.newChat}
+                title="New Chat"
               >
                 <Plus className="h-3.5 w-3.5" />
               </Link>
@@ -214,7 +196,7 @@ export function Layout() {
                 </div>
               ) : sessions.length === 0 ? (
                 <p className="px-3 py-2 text-xs text-muted-foreground/60">
-                  {t.noSessions}
+                  No sessions yet
                 </p>
               ) : null}
               {sessions.map((s) => {
@@ -270,13 +252,13 @@ export function Layout() {
                           onClick={() => deleteSession(s.session_id)}
                           className="rounded p-1 text-[10px] font-medium text-danger hover:bg-danger/10 cursor-pointer"
                         >
-                          {t.confirmDelete}
+                          Confirm
                         </button>
                         <button
                           onClick={() => setDeleteTarget(null)}
                           className="rounded p-1 text-[10px] text-muted-foreground hover:bg-muted cursor-pointer"
                         >
-                          {t.cancelDelete}
+                          Cancel
                         </button>
                       </div>
                     ) : !isRenaming ? (
@@ -300,7 +282,7 @@ export function Layout() {
                             setDeleteTarget(s.session_id);
                           }}
                           className="rounded p-1 text-muted-foreground hover:bg-danger/10 hover:text-danger cursor-pointer"
-                          title={t.deleteConfirm}
+                          title="Delete?"
                         >
                           <Trash2 className="h-3 w-3" />
                         </button>
@@ -331,7 +313,7 @@ export function Layout() {
               <button
                 onClick={toggle}
                 className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
-                title={dark ? t.lightMode : t.darkMode}
+                title={dark ? "Light" : "Dark"}
               >
                 {dark ? (
                   <Sun className="h-3.5 w-3.5" />
@@ -360,7 +342,7 @@ export function Layout() {
                     <Moon className="h-3.5 w-3.5" />
                   )}
                   <span className="hidden sm:inline">
-                    {dark ? t.lightMode : t.darkMode}
+                    {dark ? "Light" : "Dark"}
                   </span>
                 </button>
                 <div className="flex items-center gap-1">

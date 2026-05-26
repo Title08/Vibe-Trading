@@ -1,5 +1,4 @@
 import { Activity, BarChart3, Bot, Globe, NotebookPen, ShieldCheck, Sparkles, TrendingUp, UserCircle2, Users, Zap } from "lucide-react";
-import { useI18n } from "@/lib/i18n";
 
 interface Example {
   title: string;
@@ -66,7 +65,7 @@ const CATEGORIES: Category[] = [
       },
       {
         title: "Quant Strategy Desk",
-        desc: "Screening to factor research to backtest to risk audit",
+        desc: "Screening -> factor research -> backtest -> risk audit pipeline",
         prompt: "[Swarm Team Mode] Use the quant_strategy_desk preset to find and backtest the best momentum strategy on CSI 300 constituents",
       },
     ],
@@ -95,12 +94,12 @@ const CATEGORIES: Category[] = [
     examples: [
       {
         title: "Analyze My Broker Export",
-        desc: "Parse journal CSV with holding stats and PnL behavior",
+        desc: "Parse broker CSV with holding days, win rate, PnL ratio, hourly distribution",
         prompt: "Analyze the trade journal I just uploaded - full profile with holding stats, win rate, top symbols, and hourly distribution",
       },
       {
         title: "Diagnose My Behavior Biases",
-        desc: "Disposition, overtrading, chasing, anchoring",
+        desc: "Disposition effect, overtrading, chasing momentum, anchoring - severity + numeric evidence",
         prompt: "Run the 4 behavior diagnostics on my trade journal (disposition, overtrading, chasing, anchoring) and tell me which bias hurts my PnL most",
       },
     ],
@@ -112,17 +111,17 @@ const CATEGORIES: Category[] = [
     examples: [
       {
         title: "Train My Shadow from Journal",
-        desc: "Extract your strategy rules from a broker CSV",
+        desc: "Extract your strategy rules from a broker CSV and persist a Shadow profile",
         prompt: "Train my shadow account from the trading journal I just uploaded - show the extracted rules and confirm they look like my behavior",
       },
       {
         title: "How Much Am I Leaving on the Table?",
-        desc: "Backtest your shadow strategy and attribute the delta",
+        desc: "Backtest your shadow strategy and attribute delta vs. your actual PnL",
         prompt: "Run a shadow backtest for the last 90 days on the US market and break down where my PnL diverged from the shadow (rule violations, early exits, missed signals)",
       },
       {
         title: "Generate Shadow Report",
-        desc: "Equity curve, per-market Sharpe, attribution waterfall",
+        desc: "8-section HTML/PDF - equity curve, per-market Sharpe, attribution waterfall",
         prompt: "Render the shadow report and give me the URL - lead with the you-vs-shadow delta",
       },
     ],
@@ -133,11 +132,17 @@ const CAPABILITY_CHIPS = [
   "70 Finance Skills",
   "29 Swarm Presets",
   "32 Agent Tools",
-  "A-Share / Crypto / HK-US",
+  "3 Markets: A-Share / Crypto / HK-US",
   "Minute to Daily Timeframes",
   "4 Portfolio Optimizers",
+  "15+ Risk Metrics",
   "Options & Derivatives",
+  "PDF & Web Research",
   "Factor Analysis & ML",
+  "Trade Journal Analyzer",
+  "Shadow Account Backtest",
+  "Persistent Memory",
+  "Session Search",
 ];
 
 interface Props {
@@ -145,8 +150,6 @@ interface Props {
 }
 
 export function WelcomeScreen({ onExample }: Props) {
-  const { t } = useI18n();
-
   return (
     <div className="mx-auto flex min-h-[64vh] w-full min-w-0 max-w-5xl flex-col gap-6 py-6">
       <section className="glass-panel min-w-0 max-w-full overflow-hidden rounded-xl">
@@ -158,7 +161,7 @@ export function WelcomeScreen({ onExample }: Props) {
               </div>
               <div className="min-w-0">
                 <h2 className="break-words text-xl font-semibold tracking-tight sm:text-2xl">Vibe-Trading Agent Desk</h2>
-                <p className="text-sm text-muted-foreground">{t.describeStrategy}</p>
+                <p className="text-sm text-muted-foreground">Describe a trading strategy to get started.</p>
               </div>
             </div>
 
@@ -202,7 +205,7 @@ export function WelcomeScreen({ onExample }: Props) {
 
       <div className="w-full space-y-4 text-left">
         <div className="flex items-center justify-between gap-3 px-1">
-          <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{t.examples}</p>
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Try an example:</p>
           <div className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
             <BarChart3 className="h-3.5 w-3.5 text-signal" />
             Backtest, research, compare, report

@@ -66,6 +66,11 @@ async function uploadFile(file: File): Promise<UploadResult> {
   return res.json();
 }
 
+function appendQueryParam(url: string, key: string, value: string): string {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+}
+
 export const api = {
   uploadFile,
   listRuns: () => request<RunListItem[]>("/runs"),
@@ -79,7 +84,32 @@ export const api = {
   sendMessage: (sid: string, content: string) => request<{ message_id: string; attempt_id: string }>(`/sessions/${sid}/messages`, { method: "POST", body: JSON.stringify({ content }) }),
   cancelSession: (sid: string) => request<{ status: string }>(`/sessions/${sid}/cancel`, { method: "POST" }),
   getSessionMessages: (sid: string) => request<MessageItem[]>(`/sessions/${sid}/messages`),
-  sseUrl: (sid: string) => withAuthQuery(`${BASE}/sessions/${sid}/events`),
+  createGoal: (sid: string, body: CreateGoalRequest) =>
+    request<GoalSnapshot>(`/sessions/${sid}/goal`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getGoal: (sid: string) => request<GoalSnapshot>(`/sessions/${sid}/goal`),
+  updateGoal: (sid: string, body: UpdateGoalRequest) =>
+    request<UpdateGoalResponse>(`/sessions/${sid}/goal`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  addGoalEvidence: (sid: string, body: AddGoalEvidenceRequest) =>
+    request<AddGoalEvidenceResponse>(`/sessions/${sid}/goal/evidence`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateGoalStatus: (sid: string, body: UpdateGoalStatusRequest) =>
+    request<UpdateGoalStatusResponse>(`/sessions/${sid}/goal/status`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  sseUrl: (sid: string, options?: { replay?: "active" }) => {
+    let url = withAuthQuery(`${BASE}/sessions/${sid}/events`);
+    if (options?.replay) url = appendQueryParam(url, "replay", options.replay);
+    return url;
+  },
 
   // Swarm API
   listSwarmPresets: () => request<SwarmPreset[]>("/swarm/presets"),
@@ -368,6 +398,184 @@ export interface SessionItem {
   updated_at?: string;
   last_attempt_id?: string;
   is_locked?: boolean;
+}
+
+// --- Goal types ---
+
+export type GoalStatus =
+  | "active"
+  | "paused"
+  | "waiting_user"
+  | "needs_refresh"
+  | "insufficient_evidence"
+  | "compliance_blocked"
+  | "blocked"
+  | "budget_limited"
+  | "usage_limited"
+  | "complete"
+  | "cancelled"
+  | "superseded";
+
+export type GoalRiskTier =
+  | "research_general"
+  | "market_specific_short_term"
+  | "personalized_advice_or_position_sizing";
+
+export interface GoalRecord {
+  goal_id: string;
+  session_id: string;
+  status: GoalStatus;
+  objective: string;
+  ui_summary: string;
+  source: string;
+  protocol: string;
+  risk_tier: GoalRiskTier;
+  token_budget?: number | null;
+  tokens_used: number;
+  turn_budget?: number | null;
+  turns_used: number;
+  time_budget_seconds?: number | null;
+  time_used_seconds: number;
+  budget_wrapup_sent: boolean;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+  recap?: string | null;
+}
+
+export interface GoalClaim {
+  claim_id: string;
+  goal_id: string;
+  session_id: string;
+  claim_type: string;
+  text: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GoalCriterion {
+  criterion_id: string;
+  goal_id: string;
+  session_id: string;
+  text: string;
+  required: boolean;
+  status: string;
+  freshness_requirement?: string | null;
+  protocol_step?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GoalEvidence {
+  evidence_id: string;
+  goal_id: string;
+  session_id: string;
+  text: string;
+  criterion_id?: string | null;
+  claim_id?: string | null;
+  evidence_type: string;
+  tool_call_id?: string | null;
+  run_id?: string | null;
+  source_provider?: string | null;
+  source_type?: string | null;
+  source_uri?: string | null;
+  symbol_universe: string[];
+  benchmark: string[];
+  timeframe?: string | null;
+  method?: string | null;
+  assumptions: Record<string, unknown>;
+  artifact_path?: string | null;
+  artifact_hash?: string | null;
+  retrieved_at: string;
+  data_as_of?: string | null;
+  freshness_status: string;
+  verification_status: string;
+  confidence?: string | null;
+  caveat?: string | null;
+  contradicts_claim_ids: string[];
+  created_at: string;
+}
+
+export interface GoalSnapshot {
+  goal: GoalRecord;
+  claims: GoalClaim[];
+  criteria: GoalCriterion[];
+  evidence: GoalEvidence[];
+  evidence_count: number;
+}
+
+export interface CreateGoalRequest {
+  objective: string;
+  criteria?: string[];
+  ui_summary?: string;
+  protocol?: string;
+  risk_tier?: GoalRiskTier;
+  token_budget?: number;
+  turn_budget?: number;
+  time_budget_seconds?: number;
+}
+
+export interface AddGoalEvidenceRequest {
+  goal_id: string;
+  expected_goal_id: string;
+  text: string;
+  criterion_id?: string | null;
+  claim_id?: string | null;
+  evidence_type?: string;
+  tool_call_id?: string | null;
+  run_id?: string | null;
+  source_provider?: string | null;
+  source_type?: string | null;
+  source_uri?: string | null;
+  symbol_universe?: string[];
+  benchmark?: string[];
+  timeframe?: string | null;
+  method?: string | null;
+  assumptions?: Record<string, unknown>;
+  artifact_path?: string | null;
+  artifact_hash?: string | null;
+  data_as_of?: string | null;
+  confidence?: string | null;
+  caveat?: string | null;
+  contradicts_claim_ids?: string[];
+}
+
+export interface UpdateGoalRequest {
+  goal_id: string;
+  expected_goal_id: string;
+  objective?: string;
+  ui_summary?: string;
+}
+
+export interface UpdateGoalResponse {
+  goal: GoalRecord;
+  snapshot: GoalSnapshot;
+}
+
+export interface AddGoalEvidenceResponse {
+  evidence: GoalEvidence;
+  snapshot: GoalSnapshot;
+}
+
+export interface GoalAuditRowRequest {
+  criterion_id: string;
+  result: string;
+  evidence_ids?: string[];
+  notes?: string;
+}
+
+export interface UpdateGoalStatusRequest {
+  goal_id: string;
+  expected_goal_id: string;
+  status: GoalStatus;
+  audit?: GoalAuditRowRequest[];
+  recap?: string | null;
+}
+
+export interface UpdateGoalStatusResponse {
+  goal: GoalRecord;
+  snapshot: GoalSnapshot;
 }
 
 // --- Alpha Zoo types ---

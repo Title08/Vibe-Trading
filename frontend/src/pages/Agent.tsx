@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, useMemo, useCallback, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Send, Loader2, ArrowDown, Square, Download, Plus, Paperclip, X, Users } from "lucide-react";
+import { Send, Loader2, ArrowDown, Square, Download, Plus, Paperclip, X, Users, Target, ChevronDown, Pencil, Check, Play } from "lucide-react";
 import { toast } from "sonner";
 import { useAgentStore } from "@/stores/agent";
 import { useSSE } from "@/hooks/useSSE";
-import { useI18n } from "@/lib/i18n";
-import { api } from "@/lib/api";
+import { ApiError, api, type GoalSnapshot } from "@/lib/api";
+import { isReportWorthyRun } from "@/lib/runReports";
 import type { AgentMessage, ToolCallEntry } from "@/types/agent";
 import { AgentAvatar } from "@/components/chat/AgentAvatar";
 import { WelcomeScreen } from "@/components/chat/WelcomeScreen";
@@ -37,6 +37,78 @@ function groupMessages(msgs: AgentMessage[]): MsgGroup[] {
 
 const act = () => useAgentStore.getState();
 
+function isCriterionStatusMet(status: string): boolean {
+  return !["", "pending", "open", "unsatisfied"].includes(status.toLowerCase());
+}
+
+function getGoalProgress(snapshot: GoalSnapshot | null): {
+  met: number;
+  total: number;
+  label: string;
+  metLabel: string;
+  evidenceTotal: number;
+} {
+  const total = snapshot?.criteria.length ?? 0;
+  const met = snapshot?.criteria.filter((item) => criterionCovered(snapshot, item)).length ?? 0;
+  const evidenceTotal = snapshot?.evidence_count ?? 0;
+  return {
+    met,
+    total,
+    label: total > 0 ? `${met}/${total}` : "",
+    metLabel: total > 0 ? `${met}/${total} met` : "",
+    evidenceTotal,
+  };
+}
+
+function statusLabel(status: string): string {
+  return status.replace(/_/g, " ");
+}
+
+function isTerminalGoalStatus(status: string): boolean {
+  return ["complete", "cancelled", "blocked", "superseded", "usage_limited"].includes(status);
+}
+
+function criterionIndexLabel(index: number): string {
+  return String(index + 1);
+}
+
+function criterionEvidenceCount(snapshot: GoalSnapshot, criterionId: string): number {
+  return snapshot.evidence.filter((item) => item.criterion_id === criterionId).length;
+}
+
+function criterionCovered(snapshot: GoalSnapshot, criterion: GoalSnapshot["criteria"][number]): boolean {
+  return isCriterionStatusMet(criterion.status) || criterionEvidenceCount(snapshot, criterion.criterion_id) > 0;
+}
+
+function latestGoalEvidence(snapshot: GoalSnapshot) {
+  return [...snapshot.evidence]
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 2);
+}
+
+function goalKickoffPrompt(objective: string): string {
+  return [
+    "Start working on this research goal now.",
+    "Keep it research-only, use available tools when evidence is needed, add concrete evidence to the goal ledger, and keep going until the goal is complete, blocked, waiting for user input, or budget-limited.",
+    "",
+    `Goal: ${objective}`,
+  ].join("\n");
+}
+
+function goalContinuePrompt(snapshot: GoalSnapshot): string {
+  const openCriteria = snapshot.criteria
+    .filter((item) => item.required && !criterionCovered(snapshot, item))
+    .map((item) => `- ${item.text}`)
+    .join("\n");
+  return [
+    "Continue the active research goal.",
+    "Use real available tools as needed, add evidence to the goal ledger, and only stop when the goal is complete, blocked, waiting for user input, or budget-limited.",
+    "",
+    `Goal: ${snapshot.goal.objective}`,
+    openCriteria ? `Open criteria:\n${openCriteria}` : "All criteria appear covered; audit the ledger and update the goal status if completion is justified.",
+  ].join("\n");
+}
+
 /* ---------- Component ---------- */
 export function Agent() {
   const [input, setInput] = useState("");
@@ -46,6 +118,7 @@ export function Agent() {
   const sseSessionRef = useRef<string | null>(null);
   const prevSseStatusRef = useRef<string>("disconnected");
   const genRef = useRef(0);
+  const pendingGoalSessionRef = useRef<string | null>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const lastEventRef = useRef(0);
 
@@ -59,6 +132,11 @@ export function Agent() {
   const uploadMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [swarmPreset, setSwarmPreset] = useState<{ name: string; title: string } | null>(null);
+  const [goalComposerActive, setGoalComposerActive] = useState(false);
+  const [goalDetailsOpen, setGoalDetailsOpen] = useState(false);
+  const [goalSnapshot, setGoalSnapshot] = useState<GoalSnapshot | null>(null);
+  const [goalEditActive, setGoalEditActive] = useState(false);
+  const [goalEditValue, setGoalEditValue] = useState("");
 
   const messages = useAgentStore(s => s.messages);
   const streamingText = useAgentStore(s => s.streamingText);
@@ -68,7 +146,6 @@ export function Agent() {
   const sessionLoading = useAgentStore(s => s.sessionLoading);
 
   const { connect, disconnect, onStatusChange } = useSSE();
-  const { t } = useI18n();
 
   const urlSessionId = searchParams.get("session");
 
@@ -112,16 +189,40 @@ export function Agent() {
   useEffect(() => {
     onStatusChange((s) => {
       act().setSseStatus(s);
-      if (s === "reconnecting" && prevSseStatusRef.current === "connected") toast.warning(t.reconnecting);
-      else if (s === "connected" && prevSseStatusRef.current === "reconnecting") toast.success(t.connected);
+      if (s === "reconnecting" && prevSseStatusRef.current === "connected") toast.warning("Connection lost, reconnecting…");
+      else if (s === "connected" && prevSseStatusRef.current === "reconnecting") toast.success("Connection restored");
       prevSseStatusRef.current = s;
     });
-  }, [onStatusChange, t]);
+  }, [onStatusChange]);
 
   const doDisconnect = useCallback(() => {
     disconnect();
     sseSessionRef.current = null;
   }, [disconnect]);
+
+  const loadGoalSnapshot = useCallback(async (sid?: string | null) => {
+    const targetSession = sid || act().sessionId;
+    if (!targetSession) {
+      setGoalSnapshot(null);
+      setGoalDetailsOpen(false);
+      setGoalEditActive(false);
+      return;
+    }
+    try {
+      const snapshot = await api.getGoal(targetSession);
+      if (act().sessionId !== targetSession) return;
+      setGoalSnapshot(snapshot);
+    } catch (error) {
+      if (act().sessionId !== targetSession) return;
+      if (error instanceof ApiError && error.status === 404) {
+        setGoalSnapshot(null);
+        setGoalDetailsOpen(false);
+        setGoalEditActive(false);
+      } else {
+        toast.error(error instanceof Error ? error.message : "Failed to load goal.");
+      }
+    }
+  }, []);
 
   const loadSessionMessages = useCallback(async (sid: string, gen: number) => {
     try {
@@ -142,7 +243,24 @@ export function Agent() {
           if (m.content && m.content !== "Strategy execution completed.") {
             agentMsgs.push({ id: m.message_id + "_ans", type: "answer", content: m.content, provider, model, timestamp: ts });
           }
-          agentMsgs.push({ id: m.message_id, type: "run_complete", content: "", runId, metrics, timestamp: ts + 1 });
+          if (metrics && Object.keys(metrics).length > 0) {
+            agentMsgs.push({ id: m.message_id, type: "run_complete", content: "", runId, metrics, timestamp: ts + 1 });
+          } else {
+            try {
+              const runData = await api.getRun(runId);
+              if (isReportWorthyRun(runData)) {
+                agentMsgs.push({
+                  id: m.message_id,
+                  type: "run_complete",
+                  content: "",
+                  runId,
+                  metrics: runData.metrics,
+                  equityCurve: runData.equity_curve?.map((e) => ({ time: e.time, equity: e.equity })),
+                  timestamp: ts + 1,
+                });
+              }
+            } catch { /* ignore non-report attempt directories */ }
+          }
         } else {
           agentMsgs.push({ id: m.message_id, type: "answer", content: m.content, provider, model, timestamp: ts });
         }
@@ -164,7 +282,7 @@ export function Agent() {
 
     const touch = () => { lastEventRef.current = Date.now(); };
 
-    connect(api.sseUrl(sid), {
+    connect(api.sseUrl(sid, { replay: "active" }), {
       text_delta: (d) => { touch(); act().appendDelta(String(d.delta || "")); scrollToBottom(); },
       thinking_done: () => { touch(); /* don't flush — keep streaming text visible */ },
 
@@ -266,11 +384,11 @@ export function Agent() {
         if (runId) {
           try {
             const runData = await api.getRun(runId);
-            const hasMetrics = runData.metrics && Object.keys(runData.metrics).length > 0;
-            if (hasMetrics || shadowId) {
+            const hasReport = isReportWorthyRun(runData);
+            if (hasReport || shadowId) {
               s.addMessage({
                 id: "", type: "run_complete", content: "", runId,
-                metrics: hasMetrics ? runData.metrics : undefined,
+                metrics: hasReport ? runData.metrics : undefined,
                 equityCurve: runData.equity_curve?.map(e => ({ time: e.time, equity: e.equity })),
                 shadowId,
                 timestamp: Date.now(),
@@ -298,16 +416,44 @@ export function Agent() {
         scrollToBottom();
       },
 
+      "goal.created": () => {
+        touch();
+        loadGoalSnapshot(sid);
+      },
+
+      "goal.evidence": () => {
+        touch();
+        loadGoalSnapshot(sid);
+      },
+
+      "goal.updated": (d) => {
+        touch();
+        const snapshot = d.snapshot as GoalSnapshot | undefined;
+        const goal = (d.goal as GoalSnapshot["goal"] | undefined) ?? snapshot?.goal;
+        if (goal && isTerminalGoalStatus(goal.status)) {
+          setGoalSnapshot(null);
+          setGoalDetailsOpen(false);
+          setGoalEditActive(false);
+          return;
+        }
+        if (snapshot) {
+          setGoalSnapshot(snapshot);
+          return;
+        }
+        loadGoalSnapshot(sid);
+      },
+
       heartbeat: () => {},
       reconnect: (d) => { act().setSseStatus("reconnecting", Number(d.attempt ?? 0)); },
     });
-  }, [connect, disconnect, scrollToBottom]);
+  }, [connect, disconnect, loadGoalSnapshot, scrollToBottom]);
 
   useEffect(() => {
-    const gen = ++genRef.current;
     const { sessionId: curSid, messages: curMsgs, cacheSession, reset, getCachedSession, switchSession } = act();
 
     if (urlSessionId && urlSessionId !== curSid) {
+      const gen = genRef.current + 1;
+      genRef.current = gen;
       doDisconnect();
       if (curSid && curMsgs.length > 0) cacheSession(curSid, curMsgs);
 
@@ -321,14 +467,30 @@ export function Agent() {
       }
       setupSSE(urlSessionId);
     } else if (urlSessionId && urlSessionId === curSid && curMsgs.length === 0 && !sessionLoading) {
+      const gen = genRef.current + 1;
+      genRef.current = gen;
       loadSessionMessages(urlSessionId, gen);
       setupSSE(urlSessionId);
     } else if (!urlSessionId && curSid) {
+      genRef.current += 1;
       doDisconnect();
-      if (curMsgs.length > 0) cacheSession(curSid, curMsgs);
+      if (curSid && curMsgs.length > 0) cacheSession(curSid, curMsgs);
       reset();
     }
-  }, [urlSessionId, doDisconnect, loadSessionMessages, setupSSE, forceScrollToBottom]);
+  }, [urlSessionId, doDisconnect, loadSessionMessages, setupSSE, forceScrollToBottom, sessionLoading]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      setGoalSnapshot(null);
+      setGoalDetailsOpen(false);
+      return;
+    }
+    if (pendingGoalSessionRef.current === sessionId) {
+      pendingGoalSessionRef.current = null;
+      return;
+    }
+    loadGoalSnapshot(sessionId);
+  }, [sessionId, loadGoalSnapshot]);
 
   useEffect(() => () => doDisconnect(), [doDisconnect]);
 
@@ -346,6 +508,29 @@ export function Agent() {
 
   const runPrompt = async (prompt: string) => {
     if (!prompt.trim() || status === "streaming") return;
+
+    if (goalComposerActive) {
+      setInput("");
+      inputRef.current?.focus();
+      try {
+        const sid = await ensureGoalSession(prompt);
+        const snapshot = await api.createGoal(sid, { objective: prompt });
+        setGoalSnapshot(snapshot);
+        setGoalComposerActive(false);
+        setGoalDetailsOpen(true);
+        toast.success("Research goal attached");
+        const kickoff = goalKickoffPrompt(prompt);
+        act().addMessage({ id: "", type: "user", content: kickoff, timestamp: Date.now() });
+        act().setStatus("streaming");
+        forceScrollToBottom();
+        setupSSE(sid);
+        await api.sendMessage(sid, kickoff);
+      } catch (error) {
+        act().setStatus("idle");
+        toast.error(error instanceof Error ? error.message : "Failed to start goal.");
+      }
+      return;
+    }
 
     let finalPrompt = prompt;
 
@@ -377,10 +562,22 @@ export function Agent() {
       await api.sendMessage(sid, finalPrompt);
     } catch {
       act().setStatus("error");
-      toast.error(t.sendFailed);
-      act().addMessage({ id: "", type: "error", content: t.sendFailed, timestamp: Date.now() });
+      toast.error("Failed to send message, please retry.");
+      act().addMessage({ id: "", type: "error", content: "Failed to send message, please retry.", timestamp: Date.now() });
     }
   };
+
+  const ensureGoalSession = useCallback(async (title: string): Promise<string> => {
+    let sid = act().sessionId;
+    if (sid) return sid;
+    const session = await api.createSession(title.slice(0, 50));
+    sid = session.session_id;
+    pendingGoalSessionRef.current = sid;
+    act().setSessionId(sid);
+    setSearchParams({ session: sid }, { replace: true });
+    setupSSE(sid);
+    return sid;
+  }, [setSearchParams, setupSSE]);
 
   const handleSubmit = (e: FormEvent) => { e.preventDefault(); runPrompt(input.trim()); };
 
@@ -399,6 +596,63 @@ export function Agent() {
       toast.error("Cancel failed");
     }
   };
+
+  const handleCancelGoal = useCallback(async () => {
+    if (!sessionId || !goalSnapshot) return;
+    try {
+      await api.updateGoalStatus(sessionId, {
+        goal_id: goalSnapshot.goal.goal_id,
+        expected_goal_id: goalSnapshot.goal.goal_id,
+        status: "cancelled",
+        recap: "Cancelled from Web UI.",
+      });
+      setGoalSnapshot(null);
+      setGoalDetailsOpen(false);
+      toast.success("Research goal cancelled");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to cancel goal.");
+    }
+  }, [goalSnapshot, sessionId]);
+
+  const handleStartGoalEdit = useCallback(() => {
+    if (!goalSnapshot) return;
+    setGoalEditValue(goalSnapshot.goal.objective);
+    setGoalEditActive(true);
+  }, [goalSnapshot]);
+
+  const handleSaveGoalEdit = useCallback(async () => {
+    const objective = goalEditValue.trim();
+    if (!sessionId || !goalSnapshot || !objective) return;
+    try {
+      const response = await api.updateGoal(sessionId, {
+        goal_id: goalSnapshot.goal.goal_id,
+        expected_goal_id: goalSnapshot.goal.goal_id,
+        objective,
+      });
+      setGoalSnapshot(response.snapshot);
+      setGoalEditActive(false);
+      toast.success("Research goal updated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update goal.");
+    }
+  }, [goalEditValue, goalSnapshot, sessionId]);
+
+  const handleContinueGoal = useCallback(async () => {
+    if (!sessionId || !goalSnapshot || status === "streaming") return;
+    const prompt = goalContinuePrompt(goalSnapshot);
+    act().addMessage({ id: "", type: "user", content: prompt, timestamp: Date.now() });
+    act().setStatus("streaming");
+    forceScrollToBottom();
+    inputRef.current?.focus();
+    try {
+      setupSSE(sessionId);
+      await api.sendMessage(sessionId, prompt);
+    } catch {
+      act().setStatus("error");
+      toast.error("Failed to continue goal, please retry.");
+      act().addMessage({ id: "", type: "error", content: "Failed to continue goal, please retry.", timestamp: Date.now() });
+    }
+  }, [forceScrollToBottom, goalSnapshot, sessionId, setupSSE, status]);
 
   const handleRetry = useCallback((errorMsg: AgentMessage) => {
     if (status === "streaming") return;
@@ -487,6 +741,7 @@ export function Agent() {
   }, [showUploadMenu]);
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
+  const goalProgress = useMemo(() => getGoalProgress(goalSnapshot), [goalSnapshot]);
 
   return (
     <div className="flex h-full w-full min-w-0 max-w-full flex-1 flex-col overflow-hidden">
@@ -582,6 +837,180 @@ export function Agent() {
               </span>
             </div>
           )}
+          {goalComposerActive && (
+            <div className="flex items-center gap-1">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-primary/10 text-primary text-xs font-medium">
+                <Target className="h-3 w-3" />
+                New Research Goal
+                <button type="button" onClick={() => setGoalComposerActive(false)} className="hover:text-destructive transition-colors">
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            </div>
+          )}
+          {goalSnapshot && !goalComposerActive && (
+            <div className="grid gap-2">
+              <button
+                type="button"
+                onClick={() => setGoalDetailsOpen((open) => !open)}
+                className="inline-flex max-w-full items-center gap-1.5 justify-self-start rounded-lg bg-primary/10 px-2.5 py-1 text-left text-xs font-medium text-primary transition-colors hover:bg-primary/15"
+                title={goalSnapshot.goal.objective}
+                aria-label="Active research goal"
+                aria-expanded={goalDetailsOpen}
+              >
+                <Target className="h-3 w-3 shrink-0" />
+                <span className="shrink-0">Goal</span>
+                <span className="truncate text-muted-foreground">
+                  {goalSnapshot.goal.ui_summary || goalSnapshot.goal.objective}
+                </span>
+                {goalProgress.metLabel && (
+                  <span className="shrink-0 font-mono text-[11px] text-emerald-600 dark:text-emerald-400">
+                    {goalProgress.metLabel}
+                  </span>
+                )}
+                {goalProgress.evidenceTotal > 0 && (
+                  <span className="shrink-0 rounded bg-background px-1 font-mono text-[10px] text-primary">
+                    {goalProgress.evidenceTotal} ev
+                  </span>
+                )}
+                <ChevronDown
+                  className={[
+                    "h-3 w-3 shrink-0 transition-transform",
+                    goalDetailsOpen ? "rotate-180" : "",
+                  ].join(" ")}
+                  aria-hidden="true"
+                />
+              </button>
+              {goalDetailsOpen && (
+                <div className="grid gap-3 rounded-xl border border-primary/20 bg-background/95 p-3 text-xs shadow-sm">
+                  {goalEditActive ? (
+                    <div className="grid gap-2">
+                      <textarea
+                        value={goalEditValue}
+                        onChange={(event) => setGoalEditValue(event.target.value)}
+                        rows={3}
+                        className="w-full rounded-lg border bg-background px-3 py-2 text-xs leading-relaxed text-foreground outline-none focus:ring-2 focus:ring-primary/30"
+                      />
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setGoalEditActive(false)}
+                          className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                        >
+                          <X className="h-3 w-3" />
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSaveGoalEdit}
+                          disabled={!goalEditValue.trim()}
+                          className="inline-flex items-center gap-1 rounded-lg bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground transition-opacity disabled:opacity-40"
+                        >
+                          <Check className="h-3 w-3" />
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border bg-muted/20 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                      {goalSnapshot.goal.objective}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-lg border bg-muted/20 p-2.5">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Criteria
+                      </div>
+                      <div className="mt-1 font-mono text-base font-semibold text-foreground">
+                        {goalProgress.label || "0/0"}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border bg-muted/20 p-2.5">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Evidence
+                      </div>
+                      <div className="mt-1 font-mono text-base font-semibold text-foreground">
+                        {goalProgress.evidenceTotal}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid gap-1.5">
+                    {goalSnapshot.criteria.map((criterion, index) => {
+                      const evidenceCount = criterionEvidenceCount(goalSnapshot, criterion.criterion_id);
+                      const displayStatus = criterionCovered(goalSnapshot, criterion) && !isCriterionStatusMet(criterion.status)
+                        ? "covered"
+                        : statusLabel(criterion.status);
+                      return (
+                        <div
+                          key={criterion.criterion_id}
+                          className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] items-start gap-2 rounded-lg border bg-muted/20 p-2"
+                        >
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[10px] text-muted-foreground">
+                            {criterionIndexLabel(index)}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block truncate font-medium text-foreground">{criterion.text}</span>
+                            <span className="block text-[11px] text-muted-foreground">
+                              {displayStatus}
+                            </span>
+                          </span>
+                          <span className="rounded-full border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                            {evidenceCount} ev
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {goalSnapshot.evidence.length > 0 && (
+                    <div className="grid gap-1.5 border-t pt-2">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Recent Evidence
+                      </div>
+                      {latestGoalEvidence(goalSnapshot).map((item) => (
+                        <div key={item.evidence_id} className="rounded-lg bg-muted/20 px-2 py-1.5">
+                          <div className="mb-0.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                            <span className="truncate">{item.source_provider || "evidence"}</span>
+                            <span>{statusLabel(item.verification_status)}</span>
+                          </div>
+                          <div className="line-clamp-2 text-[11px] leading-relaxed text-foreground">
+                            {item.text}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap justify-end gap-2 border-t pt-2">
+                    <button
+                      type="button"
+                      onClick={handleContinueGoal}
+                      disabled={status === "streaming"}
+                      className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+                    >
+                      <Play className="h-3 w-3" />
+                      Continue
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleStartGoalEdit}
+                      disabled={goalEditActive}
+                      className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+                    >
+                      <Pencil className="h-3 w-3" />
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelGoal}
+                      className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                    >
+                      <X className="h-3 w-3" />
+                      Cancel Goal
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {/* Attachment badge */}
           {attachment && (
             <div className="flex items-center gap-1">
@@ -628,6 +1057,20 @@ export function Agent() {
                     type="button"
                     onClick={() => {
                       setShowUploadMenu(false);
+                      setSwarmPreset(null);
+                      setGoalComposerActive(true);
+                      inputRef.current?.focus();
+                    }}
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted transition-colors flex items-center gap-2"
+                  >
+                    <Target className="h-4 w-4" />
+                    Research Goal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowUploadMenu(false);
+                      setGoalComposerActive(false);
                       setSwarmPreset({ name: "auto", title: "Agent Swarm" });
                       inputRef.current?.focus();
                     }}
@@ -662,7 +1105,11 @@ export function Agent() {
                   runPrompt(input.trim());
                 }
               }}
-              placeholder={t.prompt}
+              placeholder={
+                goalComposerActive
+                  ? "Describe the research goal to attach to this session"
+                  : "e.g. Create a dual MA crossover strategy for 000001.SZ, backtest 2024"
+              }
               className="min-w-0 max-h-36 min-h-10 flex-1 resize-none overflow-y-auto rounded-xl border border-transparent bg-transparent px-3 py-2.5 text-sm transition-shadow placeholder:text-muted-foreground/70 focus:border-primary/30 focus:bg-background/30 focus:outline-none focus:ring-2 focus:ring-primary/25"
               disabled={status === "streaming"}
             />
@@ -688,7 +1135,7 @@ export function Agent() {
             ) : (
               <button
                 type="submit"
-                disabled={!input.trim() && !attachment}
+                disabled={goalComposerActive ? !input.trim() : (!input.trim() && !attachment)}
                 className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Send className="h-4 w-4" />
